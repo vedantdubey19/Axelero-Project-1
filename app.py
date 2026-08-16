@@ -23,3 +23,12 @@ if uploaded_file:
 
     st.subheader("PDF Content")
     st.write(text)
+
+    st.subheader("Ask a Question")
+
+    question = st.text_input(
+        "Enter your question about the PDF"
+    )
+
+    if question:
+        st.write("Your question:", question)
