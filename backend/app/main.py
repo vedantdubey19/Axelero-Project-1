@@ -1,6 +1,8 @@
 import os
+import uuid
 import aiofiles
-from fastapi import FastAPI, File, UploadFile, HTTPException, status
+from typing import Dict, Any
+from fastapi import FastAPI, File, UploadFile, HTTPException, status, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(
@@ -9,7 +11,6 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Setup to allow request routing from Streamlit frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -24,22 +25,38 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 MAX_FILE_SIZE_MB = 25
 ALLOWED_MIME_TYPES = ["application/pdf"]
 
+# In-memory job status tracker (In production, replace with Redis or SQL DB)
+ingestion_jobs: Dict[str, Dict[str, Any]] = {}
+
+
+def process_pdf_ingestion(job_id: str, file_path: str):
+    """
+    Background Task Execution Handler:
+    Triggers parsing (Humera's module) and vector indexing (Saju's module).
+    """
+    try:
+        ingestion_jobs[job_id]["status"] = "PROCESSING"
+        ingestion_jobs[job_id]["message"] = "Extracting text, tables, and images..."
+
+        # Downstream Pipeline Hooks (To be handled by Saju & Humera)
+        # 1. elements = parser.extract_elements(file_path)
+        # 2. embeddings = embedder.generate(elements)
+        # 3. qdrant_client.upsert(embeddings)
+
+        ingestion_jobs[job_id]["status"] = "COMPLETED"
+        ingestion_jobs[job_id]["message"] = "Document successfully ingested and indexed into Qdrant."
+    except Exception as e:
+        ingestion_jobs[job_id]["status"] = "FAILED"
+        ingestion_jobs[job_id]["message"] = f"Ingestion failed: {str(e)}"
+
 
 @app.get("/health", status_code=status.HTTP_200_OK)
 async def health_check():
-    """Health check route to verify backend service status."""
     return {"status": "healthy", "service": "OmniBrain Core API"}
 
 
 @app.post("/api/v1/upload", status_code=status.HTTP_201_CREATED)
 async def upload_pdf(file: UploadFile = File(...)):
-    """
-    Day 3-5 Milestone: Async PDF upload endpoint with validation.
-    - Validates file extension and MIME type.
-    - Uses non-blocking async disk writes (aiofiles).
-    - Enforces file size limitations.
-    """
-    # 1. Extension & MIME Type Validation (Day 4 Requirement)
     if not file.filename.endswith(".pdf") or file.content_type not in ALLOWED_MIME_TYPES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -48,23 +65,18 @@ async def upload_pdf(file: UploadFile = File(...)):
 
     file_path = os.path.join(UPLOAD_DIR, file.filename)
 
-    # 2. Non-blocking Async File Storage (Day 5 Requirement)
     try:
         file_size = 0
         async with aiofiles.open(file_path, 'wb') as out_file:
-            while chunk := await file.read(1024 * 1024):  # Read in 1MB chunks
+            while chunk := await file.read(1024 * 1024):
                 file_size += len(chunk)
-
-                # Size validation limit check
                 if file_size > MAX_FILE_SIZE_MB * 1024 * 1024:
-                    # Clean up partial file if limit exceeded
                     if os.path.exists(file_path):
                         os.remove(file_path)
                     raise HTTPException(
                         status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                         detail=f"File exceeds maximum size limit of {MAX_FILE_SIZE_MB}MB."
                     )
-
                 await out_file.write(chunk)
 
     except HTTPException as http_ex:
@@ -85,7 +97,50 @@ async def upload_pdf(file: UploadFile = File(...)):
     }
 
 
+@app.post("/api/v1/ingest", status_code=status.HTTP_202_ACCEPTED)
+async def trigger_ingestion(file_path: str, background_tasks: BackgroundTasks):
+    """
+    Day 6 Task: Endpoint to trigger document ingestion pipeline after file upload.
+    Dispatches task to background worker to prevent HTTP blocking.
+    """
+    if not os.path.exists(file_path):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Target document not found at path: {file_path}"
+        )
+
+    job_id = str(uuid.uuid4())
+    ingestion_jobs[job_id] = {
+        "job_id": job_id,
+        "file_path": file_path,
+        "status": "QUEUED",
+        "message": "Ingestion job queued successfully."
+    }
+
+    # Dispatch ingestion to run asynchronously in background
+    background_tasks.add_task(process_pdf_ingestion, job_id, file_path)
+
+    return {
+        "message": "Ingestion pipeline triggered successfully.",
+        "job_id": job_id,
+        "status": "QUEUED"
+    }
+
+
+@app.get("/api/v1/ingest/status/{job_id}", status_code=status.HTTP_200_OK)
+async def get_ingestion_status(job_id: str):
+    """
+    Status Polling Route: Used by Frontend (Venkatesh) to render processing status.
+    """
+    if job_id not in ingestion_jobs:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Ingestion job with ID '{job_id}' not found."
+        )
+
+    return ingestion_jobs[job_id]
+
+
 if __name__ == "__main__":
     import uvicorn
-
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
