@@ -1,7 +1,8 @@
 import os
 import uuid
 import aiofiles
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
+from pydantic import BaseModel, Field
 from fastapi import FastAPI, File, UploadFile, HTTPException, status, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -30,20 +31,41 @@ ALLOWED_MIME_TYPES = ["application/pdf"]
 ingestion_jobs: Dict[str, Dict[str, Any]] = {}
 
 
+# --- Pydantic Data Models ---
+
+class QueryRequest(BaseModel):
+    """Incoming user search/question payload."""
+    question: str = Field(..., min_length=2, description="The query string or question asked by the user.")
+    top_k: Optional[int] = Field(default=3, ge=1, le=10, description="Number of relevant document chunks to retrieve.")
+    document_id: Optional[str] = Field(default=None, description="Optional target document filter.")
+
+
+class RetrievedChunk(BaseModel):
+    """Schema for context chunks returned by the retriever."""
+    chunk_id: str
+    content: str
+    page: int
+    score: float
+    source: str
+
+
+class QueryResponse(BaseModel):
+    """Standardized API response for user queries."""
+    query_id: str
+    question: str
+    answer: str
+    retrieved_chunks: List[RetrievedChunk]
+    status: str
+
+
+# --- Ingestion Background Handler ---
+
 def process_pdf_ingestion(job_id: str, file_path: str):
-    """
-    Background Task Worker:
-    Simulates document extraction (Humera) and vector embedding (Saju).
-    """
     try:
         ingestion_jobs[job_id]["status"] = "PROCESSING"
         ingestion_jobs[job_id]["message"] = "Extracting text, tables, and images..."
 
-        # Integration Hooks for Week 1 pipeline:
-        # 1. elements = parser.extract_elements(file_path)
-        # 2. embeddings = embedder.generate(elements)
-        # 3. qdrant_client.upsert(embeddings)
-
+        # Downstream pipeline hooks (Humera & Saju)
         ingestion_jobs[job_id]["status"] = "COMPLETED"
         ingestion_jobs[job_id]["message"] = "Document successfully ingested and indexed into Qdrant."
     except Exception as e:
@@ -51,18 +73,15 @@ def process_pdf_ingestion(job_id: str, file_path: str):
         ingestion_jobs[job_id]["message"] = f"Ingestion failed: {str(e)}"
 
 
+# --- Endpoints ---
+
 @app.get("/health", status_code=status.HTTP_200_OK)
 async def health_check():
-    """Health check route to verify backend service status."""
     return {"status": "healthy", "service": "OmniBrain Core API"}
 
 
 @app.post("/api/v1/upload", status_code=status.HTTP_201_CREATED)
 async def upload_pdf(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
-    """
-    Day 7 Task: Accepts PDF upload, validates format, writes file asynchronously,
-    and automatically enqueues background ingestion.
-    """
     if not file.filename.endswith(".pdf") or file.content_type not in ALLOWED_MIME_TYPES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -84,7 +103,6 @@ async def upload_pdf(background_tasks: BackgroundTasks, file: UploadFile = File(
                         detail=f"File exceeds maximum size limit of {MAX_FILE_SIZE_MB}MB."
                     )
                 await out_file.write(chunk)
-
     except HTTPException as http_ex:
         raise http_ex
     except Exception as e:
@@ -95,7 +113,6 @@ async def upload_pdf(background_tasks: BackgroundTasks, file: UploadFile = File(
     finally:
         await file.close()
 
-    # Create ingestion job record
     job_id = str(uuid.uuid4())
     ingestion_jobs[job_id] = {
         "job_id": job_id,
@@ -105,7 +122,6 @@ async def upload_pdf(background_tasks: BackgroundTasks, file: UploadFile = File(
         "message": "Ingestion job queued automatically after upload."
     }
 
-    # Auto-trigger the background worker
     background_tasks.add_task(process_pdf_ingestion, job_id, file_path)
 
     return {
@@ -120,16 +136,47 @@ async def upload_pdf(background_tasks: BackgroundTasks, file: UploadFile = File(
 
 @app.get("/api/v1/ingest/status/{job_id}", status_code=status.HTTP_200_OK)
 async def get_ingestion_status(job_id: str):
-    """
-    Status Polling Route: Used by Frontend (Venkatesh) to track ingestion progress.
-    """
     if job_id not in ingestion_jobs:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Ingestion job with ID '{job_id}' not found."
         )
-
     return ingestion_jobs[job_id]
+
+
+@app.post("/api/v1/query", response_model=QueryResponse, status_code=status.HTTP_200_OK)
+async def query_documents(request: QueryRequest):
+    """
+    Query endpoint that accepts user questions and prepares payload
+    for Saju's retriever and LLM pipeline.
+    """
+    clean_question = request.question.strip()
+    if not clean_question:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Query question cannot be empty or whitespace."
+        )
+
+    query_id = str(uuid.uuid4())
+
+    # Mock retrieval placeholder : Wired to Saju's Qdrant retriever
+    mock_retrieved_chunks = [
+        RetrievedChunk(
+            chunk_id=str(uuid.uuid4()),
+            content="Sample retrieved document text for context verification.",
+            page=1,
+            score=0.89,
+            source="data/raw/sample.pdf"
+        )
+    ]
+
+    return QueryResponse(
+        query_id=query_id,
+        question=clean_question,
+        answer="This is a stub answer. Live LLM generation will be connected in Day 10.",
+        retrieved_chunks=mock_retrieved_chunks,
+        status="SUCCESS"
+    )
 
 
 if __name__ == "__main__":
