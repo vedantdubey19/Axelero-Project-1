@@ -6,13 +6,15 @@ from pydantic import BaseModel, Field
 from fastapi import FastAPI, File, UploadFile, HTTPException, status, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 
+
+from backend.app.services.retriever_service import RetrieverService
+
 app = FastAPI(
     title="OmniBrain API Core",
     description="Backend API for PDF handling, Auth, and RAG service orchestration.",
     version="1.0.0"
 )
 
-# CORS setup for Streamlit frontend integration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -27,21 +29,21 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 MAX_FILE_SIZE_MB = 25
 ALLOWED_MIME_TYPES = ["application/pdf"]
 
-# In-memory job status tracker
 ingestion_jobs: Dict[str, Dict[str, Any]] = {}
+
+# Initialize the retriever service instance
+retriever_service = RetrieverService()
 
 
 # --- Pydantic Data Models ---
 
 class QueryRequest(BaseModel):
-    """Incoming user search/question payload."""
     question: str = Field(..., min_length=2, description="The query string or question asked by the user.")
     top_k: Optional[int] = Field(default=3, ge=1, le=10, description="Number of relevant document chunks to retrieve.")
     document_id: Optional[str] = Field(default=None, description="Optional target document filter.")
 
 
 class RetrievedChunk(BaseModel):
-    """Schema for context chunks returned by the retriever."""
     chunk_id: str
     content: str
     page: int
@@ -50,7 +52,6 @@ class RetrievedChunk(BaseModel):
 
 
 class QueryResponse(BaseModel):
-    """Standardized API response for user queries."""
     query_id: str
     question: str
     answer: str
@@ -58,14 +59,14 @@ class QueryResponse(BaseModel):
     status: str
 
 
-# --- Ingestion Background Handler ---
+# --- Ingestion Background Worker ---
 
 def process_pdf_ingestion(job_id: str, file_path: str):
     try:
         ingestion_jobs[job_id]["status"] = "PROCESSING"
         ingestion_jobs[job_id]["message"] = "Extracting text, tables, and images..."
 
-        # Downstream pipeline hooks (Humera & Saju)
+        # Week 1 Pipeline Integration Hooks
         ingestion_jobs[job_id]["status"] = "COMPLETED"
         ingestion_jobs[job_id]["message"] = "Document successfully ingested and indexed into Qdrant."
     except Exception as e:
@@ -147,8 +148,7 @@ async def get_ingestion_status(job_id: str):
 @app.post("/api/v1/query", response_model=QueryResponse, status_code=status.HTTP_200_OK)
 async def query_documents(request: QueryRequest):
     """
-    Query endpoint that accepts user questions and prepares payload
-    for Saju's retriever and LLM pipeline.
+    Query endpoint wired directly to the live RetrieverService.
     """
     clean_question = request.question.strip()
     if not clean_question:
@@ -159,22 +159,26 @@ async def query_documents(request: QueryRequest):
 
     query_id = str(uuid.uuid4())
 
-    # Mock retrieval placeholder : Wired to Saju's Qdrant retriever
-    mock_retrieved_chunks = [
-        RetrievedChunk(
-            chunk_id=str(uuid.uuid4()),
-            content="Sample retrieved document text for context verification.",
-            page=1,
-            score=0.89,
-            source="data/raw/sample.pdf"
-        )
-    ]
+    # Retrieve live context chunks from Qdrant vector store
+    retrieved_data = retriever_service.retrieve_relevant_chunks(
+        query=clean_question,
+        top_k=request.top_k,
+        document_id=request.document_id
+    )
+
+    chunks = [RetrievedChunk(**item) for item in retrieved_data]
+
+    # Placeholder answer synthesized over retrieved context (Saju connects LLM generation)
+    answer_text = (
+        f"Retrieved {len(chunks)} relevant chunk(s) from indexed documents. "
+        "LLM generation output will be synthesized here."
+    )
 
     return QueryResponse(
         query_id=query_id,
         question=clean_question,
-        answer="This is a stub answer. Live LLM generation will be connected in Day 10.",
-        retrieved_chunks=mock_retrieved_chunks,
+        answer=answer_text,
+        retrieved_chunks=chunks,
         status="SUCCESS"
     )
 
