@@ -9,6 +9,12 @@ from fastapi.middleware.cors import CORSMiddleware
 # Service imports
 from backend.app.services.retriever_service import RetrieverService
 from backend.app.services.llm_service import LLMSynthesisService
+from backend.app.services.agent_service import (
+    AgentOrchestrationService,
+    AgentQueryRequest,
+    AgentQueryResponse
+)
+
 
 app = FastAPI(
     title="OmniBrain API Core",
@@ -35,6 +41,7 @@ ingestion_jobs: Dict[str, Dict[str, Any]] = {}
 # Initialize services
 retriever_service = RetrieverService()
 llm_service = LLMSynthesisService()
+
 
 
 # --- Pydantic Schemas ---
@@ -88,6 +95,35 @@ def process_pdf_ingestion(job_id: str, file_path: str):
 
 
 # --- Endpoints ---
+# Instantiate the agent orchestration service
+agent_service = AgentOrchestrationService()
+
+# Append this endpoint to backend/app/main.py
+@app.post("/api/v1/agent/query", response_model=AgentQueryResponse, status_code=status.HTTP_200_OK)
+async def query_agent_graph(request: AgentQueryRequest):
+    """
+    Day 12 Milestone: Endpoint to execute LangGraph agent workflows, returning
+    multi-step execution traces and final answers for UI rendering.
+    """
+    clean_question = request.question.strip()
+    if not clean_question:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Query question cannot be empty."
+        )
+
+    try:
+        result = await agent_service.execute_agent_workflow(
+            question=clean_question,
+            session_id=request.session_id,
+            document_id=request.document_id
+        )
+        return AgentQueryResponse(**result)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Agent workflow execution failed: {str(e)}"
+        )
 
 @app.get("/health", status_code=status.HTTP_200_OK)
 async def health_check():
