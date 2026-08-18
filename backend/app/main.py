@@ -11,6 +11,7 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# CORS setup for Streamlit frontend integration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -25,20 +26,20 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 MAX_FILE_SIZE_MB = 25
 ALLOWED_MIME_TYPES = ["application/pdf"]
 
-# In-memory job status tracker (In production, replace with Redis or SQL DB)
+# In-memory job status tracker
 ingestion_jobs: Dict[str, Dict[str, Any]] = {}
 
 
 def process_pdf_ingestion(job_id: str, file_path: str):
     """
-    Background Task Execution Handler:
-    Triggers parsing (Humera's module) and vector indexing (Saju's module).
+    Background Task Worker:
+    Simulates document extraction (Humera) and vector embedding (Saju).
     """
     try:
         ingestion_jobs[job_id]["status"] = "PROCESSING"
         ingestion_jobs[job_id]["message"] = "Extracting text, tables, and images..."
 
-        # Downstream Pipeline Hooks (To be handled by Saju & Humera)
+        # Integration Hooks for Week 1 pipeline:
         # 1. elements = parser.extract_elements(file_path)
         # 2. embeddings = embedder.generate(elements)
         # 3. qdrant_client.upsert(embeddings)
@@ -52,11 +53,16 @@ def process_pdf_ingestion(job_id: str, file_path: str):
 
 @app.get("/health", status_code=status.HTTP_200_OK)
 async def health_check():
+    """Health check route to verify backend service status."""
     return {"status": "healthy", "service": "OmniBrain Core API"}
 
 
 @app.post("/api/v1/upload", status_code=status.HTTP_201_CREATED)
-async def upload_pdf(file: UploadFile = File(...)):
+async def upload_pdf(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+    """
+    Day 7 Task: Accepts PDF upload, validates format, writes file asynchronously,
+    and automatically enqueues background ingestion.
+    """
     if not file.filename.endswith(".pdf") or file.content_type not in ALLOWED_MIME_TYPES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -89,40 +95,25 @@ async def upload_pdf(file: UploadFile = File(...)):
     finally:
         await file.close()
 
-    return {
-        "message": "File uploaded successfully",
-        "filename": file.filename,
-        "saved_path": file_path,
-        "size_bytes": file_size
-    }
-
-
-@app.post("/api/v1/ingest", status_code=status.HTTP_202_ACCEPTED)
-async def trigger_ingestion(file_path: str, background_tasks: BackgroundTasks):
-    """
-    Day 6 Task: Endpoint to trigger document ingestion pipeline after file upload.
-    Dispatches task to background worker to prevent HTTP blocking.
-    """
-    if not os.path.exists(file_path):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Target document not found at path: {file_path}"
-        )
-
+    # Create ingestion job record
     job_id = str(uuid.uuid4())
     ingestion_jobs[job_id] = {
         "job_id": job_id,
+        "filename": file.filename,
         "file_path": file_path,
         "status": "QUEUED",
-        "message": "Ingestion job queued successfully."
+        "message": "Ingestion job queued automatically after upload."
     }
 
-    # Dispatch ingestion to run asynchronously in background
+    # Auto-trigger the background worker
     background_tasks.add_task(process_pdf_ingestion, job_id, file_path)
 
     return {
-        "message": "Ingestion pipeline triggered successfully.",
+        "message": "File uploaded and ingestion pipeline triggered successfully",
         "job_id": job_id,
+        "filename": file.filename,
+        "saved_path": file_path,
+        "size_bytes": file_size,
         "status": "QUEUED"
     }
 
@@ -130,7 +121,7 @@ async def trigger_ingestion(file_path: str, background_tasks: BackgroundTasks):
 @app.get("/api/v1/ingest/status/{job_id}", status_code=status.HTTP_200_OK)
 async def get_ingestion_status(job_id: str):
     """
-    Status Polling Route: Used by Frontend (Venkatesh) to render processing status.
+    Status Polling Route: Used by Frontend (Venkatesh) to track ingestion progress.
     """
     if job_id not in ingestion_jobs:
         raise HTTPException(
