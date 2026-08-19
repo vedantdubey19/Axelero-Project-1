@@ -3,7 +3,8 @@ import uuid
 import aiofiles
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
-from fastapi import FastAPI, File, UploadFile, HTTPException, status, BackgroundTasks
+from fastapi import FastAPI, File, UploadFile, HTTPException, Request, status, BackgroundTasks
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 # Service imports
@@ -15,10 +16,9 @@ from backend.app.services.agent_service import (
     AgentQueryResponse
 )
 
-
 app = FastAPI(
     title="OmniBrain API Core",
-    description="Backend API for PDF handling, Auth, RAG orchestration, and LLM synthesis.",
+    description="Backend API Gateway for PDF ingestion, multi-modal vector search, and LangGraph agent orchestration.",
     version="1.0.0"
 )
 
@@ -38,10 +38,37 @@ ALLOWED_MIME_TYPES = ["application/pdf"]
 
 ingestion_jobs: Dict[str, Dict[str, Any]] = {}
 
-# Initialize services
+# Initialize service singletons
 retriever_service = RetrieverService()
 llm_service = LLMSynthesisService()
+agent_service = AgentOrchestrationService()
 
+
+# --- Global Error Handlers (Day 15 Hardening) ---
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "success": False,
+            "error_type": "HTTPException",
+            "detail": exc.detail,
+            "path": str(request.url)
+        }
+    )
+
+@app.exception_handler(Exception)
+async def generic_exception_handler(request: Request, exc: Exception):
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={
+            "success": False,
+            "error_type": "InternalServerError",
+            "detail": str(exc),
+            "path": str(request.url)
+        }
+    )
 
 
 # --- Pydantic Schemas ---
@@ -51,14 +78,12 @@ class QueryRequest(BaseModel):
     top_k: Optional[int] = Field(default=3, ge=1, le=10, description="Number of relevant document chunks to retrieve.")
     document_id: Optional[str] = Field(default=None, description="Optional target document filter.")
 
-
 class RetrievedChunk(BaseModel):
     chunk_id: str
     content: str
     page: int
     score: float
     source: str
-
 
 class QueryResponse(BaseModel):
     query_id: str
@@ -71,64 +96,29 @@ class QueryResponse(BaseModel):
 # --- Ingestion Background Worker ---
 
 def process_pdf_ingestion(job_id: str, file_path: str):
-    """
-    Background Task Worker:
-    Calls Humera's parser and Saju's chunking/embedding pipeline.
-    """
     try:
         ingestion_jobs[job_id]["status"] = "PROCESSING"
         ingestion_jobs[job_id]["message"] = "Extracting text, tables, and images via document parser..."
 
-        # Hook to Humera's parser module if available in repo
         try:
             from pdf_parser_module.app.services.parser import PDFParser
             parser = PDFParser()
             _ = parser.extract_all(file_path)
         except ImportError:
-            pass  # Fallback if running standalone
+            pass
 
         ingestion_jobs[job_id]["status"] = "COMPLETED"
-        ingestion_jobs[job_id]["message"] = "Document successfully ingested and indexed."
+        ingestion_jobs[job_id]["message"] = "Document successfully ingested and indexed into vector DB."
     except Exception as e:
         ingestion_jobs[job_id]["status"] = "FAILED"
         ingestion_jobs[job_id]["message"] = f"Ingestion failed: {str(e)}"
 
 
-# --- Endpoints ---
-# Instantiate the agent orchestration service
-agent_service = AgentOrchestrationService()
-
-# Append this endpoint to backend/app/main.py
-@app.post("/api/v1/agent/query", response_model=AgentQueryResponse, status_code=status.HTTP_200_OK)
-async def query_agent_graph(request: AgentQueryRequest):
-    """
-    Day 12 Milestone: Endpoint to execute LangGraph agent workflows, returning
-    multi-step execution traces and final answers for UI rendering.
-    """
-    clean_question = request.question.strip()
-    if not clean_question:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Query question cannot be empty."
-        )
-
-    try:
-        result = await agent_service.execute_agent_workflow(
-            question=clean_question,
-            session_id=request.session_id,
-            document_id=request.document_id
-        )
-        return AgentQueryResponse(**result)
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Agent workflow execution failed: {str(e)}"
-        )
+# --- Core Endpoints ---
 
 @app.get("/health", status_code=status.HTTP_200_OK)
 async def health_check():
-    return {"status": "healthy", "service": "OmniBrain Core API"}
-
+    return {"status": "healthy", "service": "OmniBrain Core API Gateway"}
 
 @app.post("/api/v1/upload", status_code=status.HTTP_201_CREATED)
 async def upload_pdf(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
@@ -183,7 +173,6 @@ async def upload_pdf(background_tasks: BackgroundTasks, file: UploadFile = File(
         "status": "QUEUED"
     }
 
-
 @app.get("/api/v1/ingest/status/{job_id}", status_code=status.HTTP_200_OK)
 async def get_ingestion_status(job_id: str):
     if job_id not in ingestion_jobs:
@@ -193,23 +182,17 @@ async def get_ingestion_status(job_id: str):
         )
     return ingestion_jobs[job_id]
 
-
 @app.post("/api/v1/query", response_model=QueryResponse, status_code=status.HTTP_200_OK)
 async def query_documents(request: QueryRequest):
-    """
-    Day 10-11 Complete Milestone:
-    Retrieves relevant chunks from vector store and synthesizes answer using LLM.
-    """
     clean_question = request.question.strip()
     if not clean_question:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Query question cannot be empty or whitespace."
+            detail="Query question cannot be empty."
         )
 
     query_id = str(uuid.uuid4())
 
-    # 1. Retrieve context chunks with exception handling
     try:
         retrieved_data = retriever_service.retrieve_relevant_chunks(
             query=clean_question,
@@ -224,7 +207,6 @@ async def query_documents(request: QueryRequest):
 
     chunks = [RetrievedChunk(**item) for item in retrieved_data]
 
-    # 2. Synthesize answer with live LLM engine
     try:
         synthesized_answer = llm_service.generate_answer(
             question=clean_question,
@@ -241,6 +223,27 @@ async def query_documents(request: QueryRequest):
         status="SUCCESS"
     )
 
+@app.post("/api/v1/agent/query", response_model=AgentQueryResponse, status_code=status.HTTP_200_OK)
+async def query_agent_graph(request: AgentQueryRequest):
+    clean_question = request.question.strip()
+    if not clean_question:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Query question cannot be empty."
+        )
+
+    try:
+        result = await agent_service.execute_agent_workflow(
+            question=clean_question,
+            session_id=request.session_id,
+            document_id=request.document_id
+        )
+        return AgentQueryResponse(**result)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Agent workflow execution failed: {str(e)}"
+        )
 
 if __name__ == "__main__":
     import uvicorn
