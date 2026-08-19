@@ -191,6 +191,44 @@ async def get_ingestion_status(job_id: str):
         )
     return ingestion_jobs[job_id]
 
+@app.get("/api/v1/search", status_code=status.HTTP_200_OK)
+async def search_documents(query: str, top_k: int = 3, document_id: Optional[str] = None):
+    """
+    Search endpoint compatible with Streamlit frontend.
+    """
+    clean_query = query.strip()
+    if not clean_query:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Search query cannot be empty."
+        )
+
+    try:
+        retrieved_data = retriever_service.retrieve_relevant_chunks(
+            query=clean_query,
+            top_k=top_k,
+            document_id=document_id
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Vector store retrieval service unavailable: {str(e)}"
+        )
+
+    matches = []
+    for chunk in retrieved_data:
+        matches.append({
+            "text": chunk.get("content", ""),
+            "metadata": {
+                "filename": chunk.get("source", "document.pdf"),
+                "chunk_id": chunk.get("chunk_id", ""),
+                "page": chunk.get("page", 1)
+            },
+            "distance": round(max(0.0, 1.0 - float(chunk.get("score", 0.0))), 4)
+        })
+
+    return {"query": clean_query, "matches": matches, "count": len(matches)}
+
 @app.post("/api/v1/query", response_model=QueryResponse, status_code=status.HTTP_200_OK)
 async def query_documents(request: QueryRequest):
     clean_question = request.question.strip()
