@@ -1,0 +1,38 @@
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Environments
+.env
+.venv/
+env/
+venv/
+ENV/
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Vector Stores & Upload Data (Runtime Generated)
+data/
+data/raw/
+data/processed/
+chroma_db/
+*.db
+*.sqlite3
+
+# Document processing runtime outputs
+logs/
+output/
+uploads/
+
+# Streamlit
+.streamlit/
+
+# OS / IDE
+.DS_Store
+.vscode/
+.idea/
