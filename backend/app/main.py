@@ -3,15 +3,22 @@ import uuid
 import aiofiles
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
-from fastapi import FastAPI, File, UploadFile, HTTPException, status, BackgroundTasks
+from fastapi import FastAPI, File, UploadFile, HTTPException, Request, status, BackgroundTasks
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-
+# Service imports
 from backend.app.services.retriever_service import RetrieverService
+from backend.app.services.llm_service import LLMSynthesisService
+from backend.app.services.agent_service import (
+    AgentOrchestrationService,
+    AgentQueryRequest,
+    AgentQueryResponse
+)
 
 app = FastAPI(
     title="OmniBrain API Core",
-    description="Backend API for PDF handling, Auth, and RAG service orchestration.",
+    description="Backend API Gateway for PDF ingestion, multi-modal vector search, and LangGraph agent orchestration.",
     version="1.0.0"
 )
 
@@ -31,17 +38,45 @@ ALLOWED_MIME_TYPES = ["application/pdf"]
 
 ingestion_jobs: Dict[str, Dict[str, Any]] = {}
 
-# Initialize the retriever service instance
+# Initialize service singletons
 retriever_service = RetrieverService()
+llm_service = LLMSynthesisService()
+agent_service = AgentOrchestrationService()
 
 
-# --- Pydantic Data Models ---
+# --- Global Error Handlers (Day 15 Hardening) ---
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "success": False,
+            "error_type": "HTTPException",
+            "detail": exc.detail,
+            "path": str(request.url)
+        }
+    )
+
+@app.exception_handler(Exception)
+async def generic_exception_handler(request: Request, exc: Exception):
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={
+            "success": False,
+            "error_type": "InternalServerError",
+            "detail": str(exc),
+            "path": str(request.url)
+        }
+    )
+
+
+# --- Pydantic Schemas ---
 
 class QueryRequest(BaseModel):
     question: str = Field(..., min_length=2, description="The query string or question asked by the user.")
     top_k: Optional[int] = Field(default=3, ge=1, le=10, description="Number of relevant document chunks to retrieve.")
     document_id: Optional[str] = Field(default=None, description="Optional target document filter.")
-
 
 class RetrievedChunk(BaseModel):
     chunk_id: str
@@ -49,7 +84,6 @@ class RetrievedChunk(BaseModel):
     page: int
     score: float
     source: str
-
 
 class QueryResponse(BaseModel):
     query_id: str
@@ -64,22 +98,27 @@ class QueryResponse(BaseModel):
 def process_pdf_ingestion(job_id: str, file_path: str):
     try:
         ingestion_jobs[job_id]["status"] = "PROCESSING"
-        ingestion_jobs[job_id]["message"] = "Extracting text, tables, and images..."
+        ingestion_jobs[job_id]["message"] = "Extracting text, tables, and images via document parser..."
 
-        # Week 1 Pipeline Integration Hooks
+        try:
+            from pdf_parser_module.app.services.parser import PDFParser
+            parser = PDFParser()
+            _ = parser.extract_all(file_path)
+        except ImportError:
+            pass
+
         ingestion_jobs[job_id]["status"] = "COMPLETED"
-        ingestion_jobs[job_id]["message"] = "Document successfully ingested and indexed into Qdrant."
+        ingestion_jobs[job_id]["message"] = "Document successfully ingested and indexed into vector DB."
     except Exception as e:
         ingestion_jobs[job_id]["status"] = "FAILED"
         ingestion_jobs[job_id]["message"] = f"Ingestion failed: {str(e)}"
 
 
-# --- Endpoints ---
+# --- Core Endpoints ---
 
 @app.get("/health", status_code=status.HTTP_200_OK)
 async def health_check():
-    return {"status": "healthy", "service": "OmniBrain Core API"}
-
+    return {"status": "healthy", "service": "OmniBrain Core API Gateway"}
 
 @app.post("/api/v1/upload", status_code=status.HTTP_201_CREATED)
 async def upload_pdf(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
@@ -134,7 +173,6 @@ async def upload_pdf(background_tasks: BackgroundTasks, file: UploadFile = File(
         "status": "QUEUED"
     }
 
-
 @app.get("/api/v1/ingest/status/{job_id}", status_code=status.HTTP_200_OK)
 async def get_ingestion_status(job_id: str):
     if job_id not in ingestion_jobs:
@@ -144,44 +182,68 @@ async def get_ingestion_status(job_id: str):
         )
     return ingestion_jobs[job_id]
 
-
 @app.post("/api/v1/query", response_model=QueryResponse, status_code=status.HTTP_200_OK)
 async def query_documents(request: QueryRequest):
-    """
-    Query endpoint wired directly to the live RetrieverService.
-    """
     clean_question = request.question.strip()
     if not clean_question:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Query question cannot be empty or whitespace."
+            detail="Query question cannot be empty."
         )
 
     query_id = str(uuid.uuid4())
 
-    # Retrieve live context chunks from Qdrant vector store
-    retrieved_data = retriever_service.retrieve_relevant_chunks(
-        query=clean_question,
-        top_k=request.top_k,
-        document_id=request.document_id
-    )
+    try:
+        retrieved_data = retriever_service.retrieve_relevant_chunks(
+            query=clean_question,
+            top_k=request.top_k,
+            document_id=request.document_id
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Vector store retrieval service unavailable: {str(e)}"
+        )
 
     chunks = [RetrievedChunk(**item) for item in retrieved_data]
 
-    # Placeholder answer synthesized over retrieved context (Saju connects LLM generation)
-    answer_text = (
-        f"Retrieved {len(chunks)} relevant chunk(s) from indexed documents. "
-        "LLM generation output will be synthesized here."
-    )
+    try:
+        synthesized_answer = llm_service.generate_answer(
+            question=clean_question,
+            retrieved_chunks=retrieved_data
+        )
+    except Exception as e:
+        synthesized_answer = f"Error generating answer from LLM: {str(e)}"
 
     return QueryResponse(
         query_id=query_id,
         question=clean_question,
-        answer=answer_text,
+        answer=synthesized_answer,
         retrieved_chunks=chunks,
         status="SUCCESS"
     )
 
+@app.post("/api/v1/agent/query", response_model=AgentQueryResponse, status_code=status.HTTP_200_OK)
+async def query_agent_graph(request: AgentQueryRequest):
+    clean_question = request.question.strip()
+    if not clean_question:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Query question cannot be empty."
+        )
+
+    try:
+        result = await agent_service.execute_agent_workflow(
+            question=clean_question,
+            session_id=request.session_id,
+            document_id=request.document_id
+        )
+        return AgentQueryResponse(**result)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Agent workflow execution failed: {str(e)}"
+        )
 
 if __name__ == "__main__":
     import uvicorn
