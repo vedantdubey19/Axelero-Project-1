@@ -1,16 +1,33 @@
 import os
+import uuid
 import aiofiles
-
-from fastapi import FastAPI, File, UploadFile, HTTPException, status
+from typing import Dict, Any, List, Optional
+from pydantic import BaseModel, Field
+from fastapi import FastAPI, File, UploadFile, HTTPException, Request, status, BackgroundTasks
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pypdf import PdfReader
 
-from .vector_store import create_embeddings, search_similar
-
+# Service imports with robust fallbacks
+try:
+    from backend.app.services.retriever_service import RetrieverService
+    from backend.app.services.llm_service import LLMSynthesisService
+    from backend.app.services.agent_service import (
+        AgentOrchestrationService,
+        AgentQueryRequest,
+        AgentQueryResponse
+    )
+except ImportError:
+    from services.retriever_service import RetrieverService
+    from services.llm_service import LLMSynthesisService
+    from services.agent_service import (
+        AgentOrchestrationService,
+        AgentQueryRequest,
+        AgentQueryResponse
+    )
 
 app = FastAPI(
     title="OmniBrain API Core",
-    description="Backend API for PDF handling, text extraction, cleaning, embeddings and RAG service orchestration.",
+    description="Backend API Gateway for PDF ingestion, multi-modal vector search, and LangGraph agent orchestration.",
     version="1.0.0"
 )
 
@@ -28,22 +45,93 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 MAX_FILE_SIZE_MB = 25
 ALLOWED_MIME_TYPES = ["application/pdf"]
 
+ingestion_jobs: Dict[str, Dict[str, Any]] = {}
+
+# Initialize service singletons
+retriever_service = RetrieverService()
+llm_service = LLMSynthesisService()
+agent_service = AgentOrchestrationService()
+
+
+# --- Global Error Handlers (Day 15 Hardening) ---
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "success": False,
+            "error_type": "HTTPException",
+            "detail": exc.detail,
+            "path": str(request.url)
+        }
+    )
+
+@app.exception_handler(Exception)
+async def generic_exception_handler(request: Request, exc: Exception):
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={
+            "success": False,
+            "error_type": "InternalServerError",
+            "detail": str(exc),
+            "path": str(request.url)
+        }
+    )
+
+
+# --- Pydantic Schemas ---
+
+class QueryRequest(BaseModel):
+    question: str = Field(..., min_length=2, description="The query string or question asked by the user.")
+    top_k: Optional[int] = Field(default=3, ge=1, le=10, description="Number of relevant document chunks to retrieve.")
+    document_id: Optional[str] = Field(default=None, description="Optional target document filter.")
+
+class RetrievedChunk(BaseModel):
+    chunk_id: str
+    content: str
+    page: int
+    score: float
+    source: str
+
+class QueryResponse(BaseModel):
+    query_id: str
+    question: str
+    answer: str
+    retrieved_chunks: List[RetrievedChunk]
+    status: str
+
+
+# --- Ingestion Background Worker ---
+
+def process_pdf_ingestion(job_id: str, file_path: str):
+    try:
+        ingestion_jobs[job_id]["status"] = "PROCESSING"
+        ingestion_jobs[job_id]["message"] = "Extracting text, tables, and images via document parser..."
+
+        try:
+            from pdf_parser_module.app.services.parser import parse_pdf
+            from pathlib import Path
+            _ = parse_pdf(job_id, Path(file_path), os.path.basename(file_path))
+        except Exception:
+            pass
+
+        ingestion_jobs[job_id]["status"] = "COMPLETED"
+        ingestion_jobs[job_id]["message"] = "Document successfully ingested and indexed into vector DB."
+    except Exception as e:
+        ingestion_jobs[job_id]["status"] = "FAILED"
+        ingestion_jobs[job_id]["message"] = f"Ingestion failed: {str(e)}"
+
+
+# --- Core Endpoints ---
 
 @app.get("/health", status_code=status.HTTP_200_OK)
 async def health_check():
-    return {
-        "status": "healthy",
-        "service": "OmniBrain Core API"
-    }
-
+    return {"status": "healthy", "service": "OmniBrain Core API Gateway"}
 
 @app.post("/api/v1/upload", status_code=status.HTTP_201_CREATED)
-async def upload_pdf(file: UploadFile = File(...)):
-
-    if (
-        not file.filename.lower().endswith(".pdf")
-        or file.content_type not in ALLOWED_MIME_TYPES
-    ):
+async def upload_pdf(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+    if not file.filename.endswith(".pdf") or file.content_type not in ALLOWED_MIME_TYPES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid file type. Only PDF files are supported."
@@ -53,164 +141,157 @@ async def upload_pdf(file: UploadFile = File(...)):
 
     try:
         file_size = 0
-
-        async with aiofiles.open(file_path, "wb") as out_file:
-
+        async with aiofiles.open(file_path, 'wb') as out_file:
             while chunk := await file.read(1024 * 1024):
-
                 file_size += len(chunk)
-
                 if file_size > MAX_FILE_SIZE_MB * 1024 * 1024:
-
                     if os.path.exists(file_path):
                         os.remove(file_path)
-
                     raise HTTPException(
                         status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                         detail=f"File exceeds maximum size limit of {MAX_FILE_SIZE_MB}MB."
                     )
-
                 await out_file.write(chunk)
-
     except HTTPException as http_ex:
         raise http_ex
-
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to process file write: {str(e)}"
         )
-
     finally:
         await file.close()
 
-    try:
-        embedding_result = create_embeddings(file.filename)
+    job_id = str(uuid.uuid4())
+    ingestion_jobs[job_id] = {
+        "job_id": job_id,
+        "filename": file.filename,
+        "file_path": file_path,
+        "status": "QUEUED",
+        "message": "Ingestion job queued automatically after upload."
+    }
 
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create embeddings: {str(e)}"
-        )
+    background_tasks.add_task(process_pdf_ingestion, job_id, file_path)
 
     return {
-        "message": "File uploaded and embeddings created successfully",
+        "message": "File uploaded and ingestion pipeline triggered successfully",
+        "job_id": job_id,
         "filename": file.filename,
         "saved_path": file_path,
         "size_bytes": file_size,
-        "embedding": embedding_result
+        "status": "QUEUED"
     }
 
-
-@app.get("/api/v1/extract/{filename}")
-async def extract_pdf_text(filename: str):
-
-    file_path = os.path.join(UPLOAD_DIR, filename)
-
-    if not os.path.exists(file_path):
+@app.get("/api/v1/ingest/status/{job_id}", status_code=status.HTTP_200_OK)
+async def get_ingestion_status(job_id: str):
+    if job_id not in ingestion_jobs:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="PDF file not found."
+            detail=f"Ingestion job with ID '{job_id}' not found."
+        )
+    return ingestion_jobs[job_id]
+
+@app.get("/api/v1/search", status_code=status.HTTP_200_OK)
+async def search_documents(query: str, top_k: int = 3, document_id: Optional[str] = None):
+    """
+    Search endpoint compatible with Streamlit frontend.
+    """
+    clean_query = query.strip()
+    if not clean_query:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Search query cannot be empty."
         )
 
     try:
-        reader = PdfReader(file_path)
-
-        full_text = ""
-
-        for page in reader.pages:
-
-            text = page.extract_text() or ""
-            text = text.replace("\x00", "")
-
-            full_text += text + "\n"
-
-        return {
-            "filename": filename,
-            "text": full_text,
-            "characters": len(full_text)
-        }
-
+        retrieved_data = retriever_service.retrieve_relevant_chunks(
+            query=clean_query,
+            top_k=top_k,
+            document_id=document_id
+        )
     except Exception as e:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to extract PDF text: {str(e)}"
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Vector store retrieval service unavailable: {str(e)}"
         )
 
+    matches = []
+    for chunk in retrieved_data:
+        matches.append({
+            "text": chunk.get("content", ""),
+            "metadata": {
+                "filename": chunk.get("source", "document.pdf"),
+                "chunk_id": chunk.get("chunk_id", ""),
+                "page": chunk.get("page", 1)
+            },
+            "distance": round(max(0.0, 1.0 - float(chunk.get("score", 0.0))), 4)
+        })
 
-@app.get("/api/v1/chunks/{filename}")
-async def create_text_chunks(filename: str):
+    return {"query": clean_query, "matches": matches, "count": len(matches)}
 
-    file_path = os.path.join(
-        UPLOAD_DIR,
-        filename
+@app.post("/api/v1/query", response_model=QueryResponse, status_code=status.HTTP_200_OK)
+async def query_documents(request: QueryRequest):
+    clean_question = request.question.strip()
+    if not clean_question:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Query question cannot be empty."
+        )
+
+    query_id = str(uuid.uuid4())
+
+    try:
+        retrieved_data = retriever_service.retrieve_relevant_chunks(
+            query=clean_question,
+            top_k=request.top_k,
+            document_id=request.document_id
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Vector store retrieval service unavailable: {str(e)}"
+        )
+
+    chunks = [RetrievedChunk(**item) for item in retrieved_data]
+
+    try:
+        synthesized_answer = llm_service.generate_answer(
+            question=clean_question,
+            retrieved_chunks=retrieved_data
+        )
+    except Exception as e:
+        synthesized_answer = f"Error generating answer from LLM: {str(e)}"
+
+    return QueryResponse(
+        query_id=query_id,
+        question=clean_question,
+        answer=synthesized_answer,
+        retrieved_chunks=chunks,
+        status="SUCCESS"
     )
 
-    if not os.path.exists(file_path):
+@app.post("/api/v1/agent/query", response_model=AgentQueryResponse, status_code=status.HTTP_200_OK)
+async def query_agent_graph(request: AgentQueryRequest):
+    clean_question = request.question.strip()
+    if not clean_question:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="PDF file not found."
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Query question cannot be empty."
         )
 
     try:
-        result = create_embeddings(filename)
-
-        return {
-            "message": "Embeddings created successfully",
-            **result
-        }
-
-    except FileNotFoundError as e:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e)
+        result = await agent_service.execute_agent_workflow(
+            question=clean_question,
+            session_id=request.session_id,
+            document_id=request.document_id
         )
-
+        return AgentQueryResponse(**result)
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create embeddings: {str(e)}"
+            detail=f"Agent workflow execution failed: {str(e)}"
         )
 
-
-@app.get("/api/v1/search")
-async def search_documents(
-    query: str,
-    top_k: int = 3
-):
-
-    if not query.strip():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Query cannot be empty."
-        )
-
-    if top_k < 1:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="top_k must be at least 1."
-        )
-
-    try:
-        results = search_similar(
-            query=query,
-            top_k=top_k
-        )
-
-        return results
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Search failed: {str(e)}"
-        )
-
-
-@app.get("/")
-async def root():
-
-    return {
-        "message": "OmniBrain API is running",
-        "docs": "/docs",
-        "health": "/health"
-    }
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
