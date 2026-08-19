@@ -3,11 +3,9 @@ import aiofiles
 
 from fastapi import FastAPI, File, UploadFile, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-
 from pypdf import PdfReader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from vector_store import create_embeddings, search_similar
+from .vector_store import create_embeddings, search_similar
 
 
 app = FastAPI(
@@ -16,8 +14,6 @@ app = FastAPI(
     version="1.0.0"
 )
 
-
-# CORS configuration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -26,7 +22,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 UPLOAD_DIR = "data/raw"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
@@ -34,22 +29,13 @@ MAX_FILE_SIZE_MB = 25
 ALLOWED_MIME_TYPES = ["application/pdf"]
 
 
-# ---------------------------------------------------------
-# HEALTH CHECK
-# ---------------------------------------------------------
-
 @app.get("/health", status_code=status.HTTP_200_OK)
 async def health_check():
-
     return {
         "status": "healthy",
         "service": "OmniBrain Core API"
     }
 
-
-# ---------------------------------------------------------
-# PDF UPLOAD
-# ---------------------------------------------------------
 
 @app.post("/api/v1/upload", status_code=status.HTTP_201_CREATED)
 async def upload_pdf(file: UploadFile = File(...)):
@@ -66,7 +52,6 @@ async def upload_pdf(file: UploadFile = File(...)):
     file_path = os.path.join(UPLOAD_DIR, file.filename)
 
     try:
-
         file_size = 0
 
         async with aiofiles.open(file_path, "wb") as out_file:
@@ -91,27 +76,31 @@ async def upload_pdf(file: UploadFile = File(...)):
         raise http_ex
 
     except Exception as e:
-
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to process file write: {str(e)}"
         )
 
     finally:
-
         await file.close()
 
+    try:
+        embedding_result = create_embeddings(file.filename)
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create embeddings: {str(e)}"
+        )
+
     return {
-        "message": "File uploaded successfully",
+        "message": "File uploaded and embeddings created successfully",
         "filename": file.filename,
         "saved_path": file_path,
-        "size_bytes": file_size
+        "size_bytes": file_size,
+        "embedding": embedding_result
     }
 
-
-# ---------------------------------------------------------
-# PDF TEXT EXTRACTION
-# ---------------------------------------------------------
 
 @app.get("/api/v1/extract/{filename}")
 async def extract_pdf_text(filename: str):
@@ -119,65 +108,12 @@ async def extract_pdf_text(filename: str):
     file_path = os.path.join(UPLOAD_DIR, filename)
 
     if not os.path.exists(file_path):
-
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="PDF file not found."
         )
 
     try:
-
-        reader = PdfReader(file_path)
-
-        pages = []
-        full_text = ""
-
-        for page_number, page in enumerate(reader.pages, start=1):
-
-            text = page.extract_text() or ""
-
-            text = text.replace("\x00", "")
-
-            pages.append({
-                "page": page_number,
-                "text": text
-            })
-
-            full_text += text + "\n\n"
-
-        return {
-            "filename": filename,
-            "total_pages": len(reader.pages),
-            "text": full_text,
-            "pages": pages
-        }
-
-    except Exception as e:
-
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to extract PDF text: {str(e)}"
-        )
-
-
-# ---------------------------------------------------------
-# TEXT CHUNKING
-# ---------------------------------------------------------
-
-@app.get("/api/v1/chunks/{filename}")
-async def create_text_chunks(filename: str):
-
-    file_path = os.path.join(UPLOAD_DIR, filename)
-
-    if not os.path.exists(file_path):
-
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="PDF file not found."
-        )
-
-    try:
-
         reader = PdfReader(file_path)
 
         full_text = ""
@@ -185,51 +121,38 @@ async def create_text_chunks(filename: str):
         for page in reader.pages:
 
             text = page.extract_text() or ""
-
             text = text.replace("\x00", "")
 
-            full_text += text + "\n\n"
-
-        splitter = RecursiveCharacterTextSplitter(
-            chunk_size=800,
-            chunk_overlap=120
-        )
-
-        chunks = splitter.split_text(full_text)
+            full_text += text + "\n"
 
         return {
             "filename": filename,
-            "total_pages": len(reader.pages),
-            "total_chunks": len(chunks),
-            "chunk_size": 800,
-            "chunk_overlap": 120,
-            "chunks": [
-                {
-                    "chunk_id": index + 1,
-                    "text": chunk,
-                    "characters": len(chunk)
-                }
-                for index, chunk in enumerate(chunks)
-            ]
+            "text": full_text,
+            "characters": len(full_text)
         }
 
     except Exception as e:
-
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create text chunks: {str(e)}"
+            detail=f"Failed to extract PDF text: {str(e)}"
         )
 
 
-# ---------------------------------------------------------
-# CREATE EMBEDDINGS
-# ---------------------------------------------------------
+@app.get("/api/v1/chunks/{filename}")
+async def create_text_chunks(filename: str):
 
-@app.post("/api/v1/embed/{filename}")
-async def embed_pdf(filename: str):
+    file_path = os.path.join(
+        UPLOAD_DIR,
+        filename
+    )
+
+    if not os.path.exists(file_path):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="PDF file not found."
+        )
 
     try:
-
         result = create_embeddings(filename)
 
         return {
@@ -238,23 +161,17 @@ async def embed_pdf(filename: str):
         }
 
     except FileNotFoundError as e:
-
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(e)
         )
 
     except Exception as e:
-
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Embedding failed: {str(e)}"
+            detail=f"Failed to create embeddings: {str(e)}"
         )
 
-
-# ---------------------------------------------------------
-# SEARCH / RETRIEVAL
-# ---------------------------------------------------------
 
 @app.get("/api/v1/search")
 async def search_documents(
@@ -263,21 +180,18 @@ async def search_documents(
 ):
 
     if not query.strip():
-
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Query cannot be empty."
         )
 
-    if top_k < 1 or top_k > 10:
-
+    if top_k < 1:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="top_k must be between 1 and 10."
+            detail="top_k must be at least 1."
         )
 
     try:
-
         results = search_similar(
             query=query,
             top_k=top_k
@@ -286,24 +200,17 @@ async def search_documents(
         return results
 
     except Exception as e:
-
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Search failed: {str(e)}"
         )
 
 
-# ---------------------------------------------------------
-# RUN SERVER
-# ---------------------------------------------------------
+@app.get("/")
+async def root():
 
-if __name__ == "__main__":
-
-    import uvicorn
-
-    uvicorn.run(
-        "main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True
-    )
+    return {
+        "message": "OmniBrain API is running",
+        "docs": "/docs",
+        "health": "/health"
+    }
