@@ -91,4 +91,36 @@ Responsible for:
 
 ## Project Status
 
-🟢 Project Initialized
+🟢 Multi-Agent Supervisor Active & Verified
+
+---
+
+## Multi-Agent Supervisor Architecture
+
+OmniBrain incorporates a LangGraph-driven **Supervisor Agent** that dynamically orchestrates specialized agent workflows:
+- **`SupervisorAgent`**: Evaluates query intent and dispatches queries to target agents (`SearchAgent`, `VisionAgent`).
+- **`SearchAgent`**: Executes dense vector retrieval from Qdrant and grounded synthesis via `LLMSynthesisService`.
+- **`VisionAgent`**: Explicit labeled stub for multimodal chart/image reasoning.
+
+### Running End-to-End Tests
+
+To execute the full automated test suite (canonical retrieval pipeline + multi-agent supervisor routing + empty context handling):
+
+```bash
+pytest -v --maxfail=1
+```
+
+Or run the supervisor routing suite specifically:
+
+```bash
+pytest tests/test_supervisor_routing.py -v
+```
+
+### Running the Live Demo
+
+Run the standalone live demonstration script showing PDF upload, supervisor intent classification, real vector search, and grounded synthesis:
+
+```bash
+python scripts/demo_supervisor.py
+```
+
