@@ -2,7 +2,10 @@
 
 from pathlib import Path
 
-from app.services.table_extractor import extract_all_tables
+try:
+    from pdf_parser_module.app.services.table_extractor import extract_all_tables
+except ImportError:
+    from app.services.table_extractor import extract_all_tables
 
 
 def test_extract_all_tables_with_no_tables_returns_empty_lists(
