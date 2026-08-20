@@ -109,18 +109,91 @@ def process_pdf_ingestion(job_id: str, file_path: str):
         ingestion_jobs[job_id]["status"] = "PROCESSING"
         ingestion_jobs[job_id]["message"] = "Extracting text, tables, and images via document parser..."
 
+        parse_result = None
         try:
             from pdf_parser_module.app.services.parser import parse_pdf
             from pathlib import Path
-            _ = parse_pdf(job_id, Path(file_path), os.path.basename(file_path))
-        except Exception:
-            pass
+            parse_result = parse_pdf(job_id, Path(file_path), os.path.basename(file_path))
+        except Exception as parse_err:
+            ingestion_jobs[job_id]["status"] = "FAILED"
+            ingestion_jobs[job_id]["message"] = f"PDF parsing failed: {str(parse_err)}"
+            return
+
+        # Index parsed text chunks into Qdrant for retriever_service
+        filename = os.path.basename(file_path)
+        try:
+            _index_parsed_text_to_qdrant(parse_result, filename)
+        except Exception as index_err:
+            ingestion_jobs[job_id]["status"] = "FAILED"
+            ingestion_jobs[job_id]["message"] = f"Vector indexing failed: {str(index_err)}"
+            return
 
         ingestion_jobs[job_id]["status"] = "COMPLETED"
         ingestion_jobs[job_id]["message"] = "Document successfully ingested and indexed into vector DB."
     except Exception as e:
         ingestion_jobs[job_id]["status"] = "FAILED"
         ingestion_jobs[job_id]["message"] = f"Ingestion failed: {str(e)}"
+
+
+def _index_parsed_text_to_qdrant(parse_result, filename: str):
+    """
+    Indexes parsed PDF text into the Qdrant collection used by RetrieverService.
+    Splits each page's text into chunks and upserts with embeddings.
+    """
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+    from qdrant_client.models import PointStruct, VectorParams, Distance
+
+    if parse_result is None:
+        return
+
+    splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=120)
+    points = []
+    all_texts = []
+    all_metadata = []
+
+    for page in parse_result.pages:
+        text = page.text.strip() if page.text else ""
+        if not text:
+            continue
+        chunks = splitter.split_text(text)
+        for chunk in chunks:
+            all_texts.append(chunk)
+            all_metadata.append({
+                "source": filename,
+                "page": page.page_number,
+                "content": chunk
+            })
+
+    if not all_texts:
+        return
+
+    # Use the same embedder as retriever_service
+    embeddings = retriever_service.embedder.encode(all_texts, convert_to_numpy=True).tolist()
+
+    collection_name = retriever_service.collection_name
+    vector_size = len(embeddings[0])
+
+    # Ensure collection exists
+    try:
+        retriever_service.client.get_collection(collection_name)
+    except Exception:
+        retriever_service.client.create_collection(
+            collection_name=collection_name,
+            vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE)
+        )
+
+    for i, (embedding, meta) in enumerate(zip(embeddings, all_metadata)):
+        point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{filename}_{meta['page']}_{i}"))
+        points.append(PointStruct(
+            id=point_id,
+            vector=embedding,
+            payload=meta
+        ))
+
+    retriever_service.client.upsert(
+        collection_name=collection_name,
+        points=points
+    )
 
 
 # --- Core Endpoints ---
