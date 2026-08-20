@@ -7,7 +7,10 @@ from pathlib import Path
 
 from PIL import Image
 
-from app.core.logger import logger
+try:
+    from pdf_parser_module.app.core.logger import logger
+except ImportError:
+    from app.core.logger import logger
 
 
 def save_image_bytes(image_bytes: bytes, destination: Path) -> tuple[int, int]:

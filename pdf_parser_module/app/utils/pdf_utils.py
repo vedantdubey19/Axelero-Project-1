@@ -10,8 +10,12 @@ from pathlib import Path
 
 import fitz  # PyMuPDF
 
-from app.core.exceptions import CorruptedPDFError, PasswordProtectedPDFError
-from app.core.logger import logger
+try:
+    from pdf_parser_module.app.core.exceptions import CorruptedPDFError, PasswordProtectedPDFError
+    from pdf_parser_module.app.core.logger import logger
+except ImportError:
+    from app.core.exceptions import CorruptedPDFError, PasswordProtectedPDFError
+    from app.core.logger import logger
 
 
 def open_pdf(path: Path) -> fitz.Document:

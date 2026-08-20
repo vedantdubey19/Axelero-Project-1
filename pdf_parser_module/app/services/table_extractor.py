@@ -6,8 +6,12 @@ import csv
 
 import pdfplumber
 
-from app.core.logger import logger
-from app.models.schemas import TableData
+try:
+    from pdf_parser_module.app.core.logger import logger
+    from pdf_parser_module.app.models.schemas import TableData
+except ImportError:
+    from app.core.logger import logger
+    from app.models.schemas import TableData
 
 
 def extract_all_tables(

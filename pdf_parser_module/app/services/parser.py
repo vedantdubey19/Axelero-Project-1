@@ -10,16 +10,28 @@ assembles everything into a single ParseResult.
 import time
 from pathlib import Path
 
-from app.core.config import settings
-from app.core.exceptions import CorruptedPDFError, PasswordProtectedPDFError, PDFParserError
-from app.core.logger import logger
-from app.models.schemas import PageResult, ParseResult
-from app.services import metadata as metadata_service
-from app.services import ocr as ocr_service
-from app.services import table_extractor as table_service
-from app.services.image_extractor import extract_images_from_page
-from app.utils.file_utils import ensure_output_subfolder
-from app.utils.pdf_utils import get_page_text, open_pdf, page_has_meaningful_text
+try:
+    from pdf_parser_module.app.core.config import settings
+    from pdf_parser_module.app.core.exceptions import CorruptedPDFError, PasswordProtectedPDFError, PDFParserError
+    from pdf_parser_module.app.core.logger import logger
+    from pdf_parser_module.app.models.schemas import PageResult, ParseResult
+    from pdf_parser_module.app.services import metadata as metadata_service
+    from pdf_parser_module.app.services import ocr as ocr_service
+    from pdf_parser_module.app.services import table_extractor as table_service
+    from pdf_parser_module.app.services.image_extractor import extract_images_from_page
+    from pdf_parser_module.app.utils.file_utils import ensure_output_subfolder
+    from pdf_parser_module.app.utils.pdf_utils import get_page_text, open_pdf, page_has_meaningful_text
+except ImportError:
+    from app.core.config import settings
+    from app.core.exceptions import CorruptedPDFError, PasswordProtectedPDFError, PDFParserError
+    from app.core.logger import logger
+    from app.models.schemas import PageResult, ParseResult
+    from app.services import metadata as metadata_service
+    from app.services import ocr as ocr_service
+    from app.services import table_extractor as table_service
+    from app.services.image_extractor import extract_images_from_page
+    from app.utils.file_utils import ensure_output_subfolder
+    from app.utils.pdf_utils import get_page_text, open_pdf, page_has_meaningful_text
 
 
 def parse_pdf(file_id: str, file_path: Path, original_filename: str) -> ParseResult:

@@ -11,7 +11,10 @@ import sys
 
 from loguru import logger
 
-from app.core.config import settings
+try:
+    from pdf_parser_module.app.core.config import settings
+except ImportError:
+    from app.core.config import settings
 
 # Make sure the logs/ directory actually exists before loguru tries
 # to write to it.

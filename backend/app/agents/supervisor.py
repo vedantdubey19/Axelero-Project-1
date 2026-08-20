@@ -16,9 +16,35 @@ except ImportError:
     from services.llm_service import LLMSynthesisService
     from services.agent_service import AgentGraphState
 
-# Shared service instances
+# Fallback service instances
 retriever_service = RetrieverService()
 llm_service = LLMSynthesisService()
+
+
+def get_retriever_service() -> RetrieverService:
+    """Retrieve shared retriever service instance from main app if running."""
+    try:
+        from backend.app.main import retriever_service as main_retriever
+        return main_retriever
+    except Exception:
+        try:
+            from main import retriever_service as main_retriever
+            return main_retriever
+        except Exception:
+            return retriever_service
+
+
+def get_llm_service() -> LLMSynthesisService:
+    """Retrieve shared LLM service instance from main app if running."""
+    try:
+        from backend.app.main import llm_service as main_llm
+        return main_llm
+    except Exception:
+        try:
+            from main import llm_service as main_llm
+            return main_llm
+        except Exception:
+            return llm_service
 
 
 def classify_route(query: str) -> str:
@@ -65,15 +91,18 @@ def search_agent_node(state: AgentGraphState) -> Dict[str, Any]:
     question = state.get("question", "")
     document_id = state.get("document_id")
 
+    active_retriever = get_retriever_service()
+    active_llm = get_llm_service()
+
     # Real retrieval call
-    chunks = retriever_service.retrieve_relevant_chunks(
+    chunks = active_retriever.retrieve_relevant_chunks(
         query=question,
         top_k=3,
         document_id=document_id
     )
 
     # Real LLM synthesis call
-    answer = llm_service.generate_answer(
+    answer = active_llm.generate_answer(
         question=question,
         retrieved_chunks=chunks
     )
