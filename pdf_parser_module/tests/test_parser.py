@@ -4,8 +4,12 @@ from pathlib import Path
 
 import pytest
 
-from app.core.exceptions import CorruptedPDFError, PasswordProtectedPDFError
-from app.services.parser import parse_pdf
+try:
+    from pdf_parser_module.app.core.exceptions import CorruptedPDFError, PasswordProtectedPDFError
+    from pdf_parser_module.app.services.parser import parse_pdf
+except ImportError:
+    from app.core.exceptions import CorruptedPDFError, PasswordProtectedPDFError
+    from app.services.parser import parse_pdf
 
 
 def test_parse_pdf_returns_correct_page_count(sample_pdf_path: Path) -> None:

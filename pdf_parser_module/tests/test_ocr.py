@@ -4,7 +4,10 @@ from pathlib import Path
 
 import fitz
 
-from app.services.ocr import run_ocr_on_page
+try:
+    from pdf_parser_module.app.services.ocr import run_ocr_on_page
+except ImportError:
+    from app.services.ocr import run_ocr_on_page
 
 
 def test_run_ocr_on_blank_page_returns_string(blank_pdf_path: Path) -> None:

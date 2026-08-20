@@ -4,7 +4,10 @@ from pathlib import Path
 
 import fitz
 
-from app.services.image_extractor import extract_images_from_page
+try:
+    from pdf_parser_module.app.services.image_extractor import extract_images_from_page
+except ImportError:
+    from app.services.image_extractor import extract_images_from_page
 
 
 def test_extract_images_from_page_with_no_images_returns_empty_list(
