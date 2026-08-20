@@ -10,10 +10,16 @@ from pathlib import Path
 
 import fitz
 
-from app.core.config import settings
-from app.core.exceptions import MetadataExtractionError
-from app.core.logger import logger
-from app.models.schemas import PDFMetadata
+try:
+    from pdf_parser_module.app.core.config import settings
+    from pdf_parser_module.app.core.exceptions import MetadataExtractionError
+    from pdf_parser_module.app.core.logger import logger
+    from pdf_parser_module.app.models.schemas import PDFMetadata
+except ImportError:
+    from app.core.config import settings
+    from app.core.exceptions import MetadataExtractionError
+    from app.core.logger import logger
+    from app.models.schemas import PDFMetadata
 
 
 def extract_metadata(document: fitz.Document, file_path: Path) -> PDFMetadata:

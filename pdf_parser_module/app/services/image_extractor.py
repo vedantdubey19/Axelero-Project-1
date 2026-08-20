@@ -9,9 +9,14 @@ from pathlib import Path
 
 import fitz
 
-from app.core.logger import logger
-from app.models.schemas import ImageData
-from app.utils.image_utils import save_image_bytes
+try:
+    from pdf_parser_module.app.core.logger import logger
+    from pdf_parser_module.app.models.schemas import ImageData
+    from pdf_parser_module.app.utils.image_utils import save_image_bytes
+except ImportError:
+    from app.core.logger import logger
+    from app.models.schemas import ImageData
+    from app.utils.image_utils import save_image_bytes
 
 
 def extract_images_from_page(

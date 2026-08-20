@@ -9,11 +9,18 @@ page into an image and run Tesseract OCR on it to recover the text.
 import fitz
 import pytesseract
 
-from app.core.config import settings
-from app.core.exceptions import OCRProcessingError
-from app.core.logger import logger
-from app.utils.image_utils import bytes_to_pil_image
-from app.utils.pdf_utils import render_page_to_image
+try:
+    from pdf_parser_module.app.core.config import settings
+    from pdf_parser_module.app.core.exceptions import OCRProcessingError
+    from pdf_parser_module.app.core.logger import logger
+    from pdf_parser_module.app.utils.image_utils import bytes_to_pil_image
+    from pdf_parser_module.app.utils.pdf_utils import render_page_to_image
+except ImportError:
+    from app.core.config import settings
+    from app.core.exceptions import OCRProcessingError
+    from app.core.logger import logger
+    from app.utils.image_utils import bytes_to_pil_image
+    from app.utils.pdf_utils import render_page_to_image
 
 # If a custom tesseract path was provided (common on Windows, where it
 # is not automatically added to PATH), configure pytesseract to use it.
