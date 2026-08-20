@@ -1,16 +1,8 @@
 import streamlit as st
 import requests
-
-# ==========================================
-# CONFIG
-# ==========================================
+import time
 
 BACKEND_URL = "http://127.0.0.1:8000"
-
-
-# ==========================================
-# PAGE
-# ==========================================
 
 st.set_page_config(
     page_title="OmniBrain",
@@ -18,29 +10,17 @@ st.set_page_config(
     layout="wide"
 )
 
-
-# ==========================================
-# SESSION STATE
-# ==========================================
-
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
 if "uploaded_filename" not in st.session_state:
     st.session_state.uploaded_filename = None
 
-
-# ==========================================
-# HEADER
-# ==========================================
+if "job_id" not in st.session_state:
+    st.session_state.job_id = None
 
 st.title("🧠 OmniBrain")
 st.write("Upload your PDF and ask questions")
-
-
-# ==========================================
-# SIDEBAR
-# ==========================================
 
 with st.sidebar:
 
@@ -60,7 +40,6 @@ with st.sidebar:
             "Upload a PDF to start."
         )
 
-
     st.divider()
 
     if st.button("🗑️ Clear Chat"):
@@ -69,10 +48,6 @@ with st.sidebar:
 
         st.rerun()
 
-
-# ==========================================
-# PDF UPLOAD
-# ==========================================
 
 st.subheader("📄 Upload Document")
 
@@ -86,9 +61,7 @@ if uploaded_file is not None:
 
     if st.button("Upload PDF", type="primary"):
 
-        with st.spinner(
-            "📤 Uploading PDF..."
-        ):
+        with st.spinner("📤 Uploading PDF..."):
 
             try:
 
@@ -106,16 +79,116 @@ if uploaded_file is not None:
                     timeout=120
                 )
 
-
                 if response.status_code in [200, 201]:
 
-                    st.session_state.uploaded_filename = (
-                        uploaded_file.name
-                    )
+                    data = response.json()
 
-                    st.success(
-                        "✅ PDF uploaded successfully!"
-                    )
+                    job_id = data.get("job_id")
+
+                    if not job_id:
+
+                        st.error(
+                            "❌ Upload succeeded, but no job ID was returned."
+                        )
+
+                    else:
+
+                        st.session_state.uploaded_filename = (
+                            uploaded_file.name
+                        )
+
+                        st.session_state.job_id = job_id
+
+                        st.success(
+                            "✅ PDF uploaded successfully!"
+                        )
+
+                        status_placeholder = st.empty()
+
+                        while True:
+
+                            try:
+
+                                status_response = requests.get(
+                                    f"{BACKEND_URL}/api/v1/ingest/status/{job_id}",
+                                    timeout=30
+                                )
+
+                                if status_response.status_code != 200:
+
+                                    status_placeholder.error(
+                                        f"❌ Unable to check processing status: "
+                                        f"{status_response.status_code}"
+                                    )
+
+                                    break
+
+                                status_data = status_response.json()
+
+                                status = status_data.get(
+                                    "status",
+                                    "UNKNOWN"
+                                )
+
+                                if status == "QUEUED":
+
+                                    status_placeholder.info(
+                                        "⏳ PDF is queued for processing..."
+                                    )
+
+                                elif status == "PROCESSING":
+
+                                    status_placeholder.info(
+                                        "⚙️ PDF is being processed..."
+                                    )
+
+                                elif status in ["COMPLETED", "DONE"]:
+
+                                    status_placeholder.success(
+                                        "✅ PDF processing completed. "
+                                        "Your document is ready!"
+                                    )
+
+                                    break
+
+                                elif status == "FAILED":
+
+                                    status_placeholder.error(
+                                        "❌ PDF processing failed."
+                                    )
+
+                                    break
+
+                                else:
+
+                                    status_placeholder.warning(
+                                        f"ℹ️ Current processing status: "
+                                        f"{status}"
+                                    )
+
+                                time.sleep(2)
+
+                            except requests.exceptions.Timeout:
+
+                                status_placeholder.warning(
+                                    "⏳ Waiting for processing status..."
+                                )
+
+                            except requests.exceptions.ConnectionError:
+
+                                status_placeholder.error(
+                                    "❌ Cannot connect to FastAPI."
+                                )
+
+                                break
+
+                            except Exception as e:
+
+                                status_placeholder.error(
+                                    f"❌ Status check error: {e}"
+                                )
+
+                                break
 
                 else:
 
@@ -130,16 +203,18 @@ if uploaded_file is not None:
                     "❌ Backend is not running."
                 )
 
+            except requests.exceptions.Timeout:
+
+                st.error(
+                    "❌ Upload request timed out."
+                )
+
             except Exception as e:
 
                 st.error(
                     f"❌ Error: {e}"
                 )
 
-
-# ==========================================
-# CURRENT DOCUMENT
-# ==========================================
 
 if st.session_state.uploaded_filename:
 
@@ -149,18 +224,10 @@ if st.session_state.uploaded_filename:
     )
 
 
-# ==========================================
-# CHAT
-# ==========================================
-
 st.divider()
 
 st.subheader("💬 Chat with your document")
 
-
-# ==========================================
-# DISPLAY OLD CHAT
-# ==========================================
 
 for message in st.session_state.chat_history:
 
@@ -182,30 +249,19 @@ for message in st.session_state.chat_history:
                 for source in message["sources"]:
 
                     st.markdown(
-                        f"**{source['filename']}**  \n"
+                        f"**📄 {source['filename']}**  \n"
                         f"Chunk: `{source['chunk_id']}`  \n"
-                        f"Distance: `{source['distance']}`"
+                        f"Page: `{source['page']}`  \n"
+                        f"Score: `{source['score']}`"
                     )
 
-
-# ==========================================
-# CHAT INPUT
-# ==========================================
 
 question = st.chat_input(
     "Ask something about your PDF..."
 )
 
 
-# ==========================================
-# PROCESS QUESTION
-# ==========================================
-
 if question:
-
-    # --------------------------------------
-    # User Message
-    # --------------------------------------
 
     st.session_state.chat_history.append(
         {
@@ -219,10 +275,6 @@ if question:
         st.markdown(question)
 
 
-    # --------------------------------------
-    # Assistant
-    # --------------------------------------
-
     with st.chat_message("assistant"):
 
         with st.spinner(
@@ -231,11 +283,12 @@ if question:
 
             try:
 
-                response = requests.get(
-                    f"{BACKEND_URL}/api/v1/search",
-                    params={
-                        "query": question,
-                        "top_k": 3
+                response = requests.post(
+                    f"{BACKEND_URL}/api/v1/query",
+                    json={
+                        "question": question,
+                        "top_k": 3,
+                        "document_id": None
                     },
                     timeout=60
                 )
@@ -245,124 +298,112 @@ if question:
 
                     data = response.json()
 
-                    matches = data.get(
-                        "matches",
+                    answer = data.get(
+                        "answer",
+                        ""
+                    )
+
+                    retrieved_chunks = data.get(
+                        "retrieved_chunks",
                         []
                     )
 
+                    status = data.get(
+                        "status",
+                        "UNKNOWN"
+                    )
 
-                    if matches:
 
-                        # ----------------------------------
-                        # Create readable answer
-                        # ----------------------------------
+                    if status == "SUCCESS":
 
-                        answer_parts = []
+                        if answer:
+
+                            st.markdown(answer)
+
+                        else:
+
+                            st.warning(
+                                "⚠️ The backend returned an empty answer."
+                            )
+
 
                         sources = []
 
+                        for chunk in retrieved_chunks:
 
-                        for match in matches:
-
-                            text = match.get(
-                                "text",
-                                ""
-                            )
-
-                            metadata = match.get(
-                                "metadata",
-                                {}
-                            )
-
-                            filename = metadata.get(
-                                "filename",
-                                "Unknown"
-                            )
-
-                            chunk_id = metadata.get(
+                            chunk_id = chunk.get(
                                 "chunk_id",
                                 "Unknown"
                             )
 
-                            distance = match.get(
-                                "distance",
+                            content = chunk.get(
+                                "content",
+                                ""
+                            )
+
+                            page = chunk.get(
+                                "page",
+                                "Unknown"
+                            )
+
+                            score = chunk.get(
+                                "score",
                                 0
                             )
 
-
-                            # Save text
-
-                            answer_parts.append(
-                                text
+                            source = chunk.get(
+                                "source",
+                                "Unknown"
                             )
-
-
-                            # Save source
 
                             sources.append(
                                 {
-                                    "filename": filename,
+                                    "filename": source,
                                     "chunk_id": chunk_id,
-                                    "distance": round(
-                                        distance,
+                                    "page": page,
+                                    "score": round(
+                                        score,
                                         4
-                                    )
+                                    ),
+                                    "content": content
                                 }
                             )
 
 
-                        # ----------------------------------
-                        # Display answer
-                        # ----------------------------------
+                        if sources:
 
-                        st.markdown(
-                            "Here is the relevant information "
-                            "from your document:"
-                        )
+                            with st.expander(
+                                "📚 View Sources"
+                            ):
 
+                                for source in sources:
 
-                        for index, text in enumerate(
-                            answer_parts,
-                            start=1
-                        ):
+                                    st.markdown(
+                                        f"**📄 "
+                                        f"{source['filename']}**  \n"
+                                        f"Chunk: "
+                                        f"`{source['chunk_id']}`  \n"
+                                        f"Page: "
+                                        f"`{source['page']}`  \n"
+                                        f"Score: "
+                                        f"`{source['score']}`"
+                                    )
 
-                            st.markdown(
-                                f"**{index}.** {text}"
-                            )
+                                    if source["content"]:
 
+                                        st.caption(
+                                            source["content"]
+                                        )
 
-                        # ----------------------------------
-                        # Sources
-                        # ----------------------------------
+                                    st.divider()
 
-                        with st.expander(
-                            "📚 View Sources"
-                        ):
-
-                            for source in sources:
-
-                                st.markdown(
-                                    f"**📄 "
-                                    f"{source['filename']}**  \n"
-                                    f"Chunk: "
-                                    f"`{source['chunk_id']}`  \n"
-                                    f"Distance: "
-                                    f"`{source['distance']}`"
-                                )
-
-
-                        # ----------------------------------
-                        # Save assistant message
-                        # ----------------------------------
 
                         st.session_state.chat_history.append(
                             {
                                 "role": "assistant",
-                                "content": (
-                                    "Here is the relevant "
-                                    "information from your "
-                                    "document."
-                                ),
+                                "content": answer
+                                if answer
+                                else "No answer was returned.",
                                 "sources": sources
                             }
                         )
@@ -371,27 +412,32 @@ if question:
                     else:
 
                         st.warning(
-                            "No relevant information "
-                            "was found."
+                            f"⚠️ Query completed with status: "
+                            f"{status}"
                         )
 
                         st.session_state.chat_history.append(
                             {
                                 "role": "assistant",
                                 "content": (
-                                    "Sorry, I couldn't find "
-                                    "relevant information in "
-                                    "the uploaded document."
+                                    f"Query status: {status}"
                                 ),
                                 "sources": []
                             }
                         )
 
 
+                elif response.status_code == 422:
+
+                    st.error(
+                        "❌ Invalid request sent to the backend."
+                    )
+
+
                 else:
 
                     st.error(
-                        f"Backend error: "
+                        f"❌ Backend error: "
                         f"{response.status_code}"
                     )
 
@@ -416,10 +462,6 @@ if question:
                     f"❌ Error: {e}"
                 )
 
-
-# ==========================================
-# FOOTER
-# ==========================================
 
 st.divider()
 
