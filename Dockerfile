@@ -1,15 +1,16 @@
 FROM python:3.11-slim
 
-# Set environment variables
+# Prevent .pyc files & enable unbuffered stdout
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-# Install system dependencies (including Tesseract OCR for PDF parsing fallback)
+# Install system dependencies (including Tesseract OCR & poppler for PDF parsing fallback)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     tesseract-ocr \
+    poppler-utils \
     libtesseract-dev \
     && rm -rf /var/lib/apt/lists/*
 
