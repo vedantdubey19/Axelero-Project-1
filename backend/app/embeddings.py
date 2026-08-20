@@ -1,13 +1,22 @@
+"""
+DEPRECATED — Standalone prototype, superseded by backend/app/services/retriever_service.py.
+Preserved for backwards compatibility with legacy local scripts.
+"""
 import os
 from typing import List, Dict, Any
 
-# Option A: Sentence-Transformers (Free, local HuggingFace model)
-# Install via: pip install sentence-transformers
-try:
-    from sentence_transformers import SentenceTransformer
-    LOCAL_MODEL = SentenceTransformer("all-MiniLM-L6-v2")
-except ImportError:
-    LOCAL_MODEL = None
+_LOCAL_MODEL = None
+
+
+def get_local_model():
+    global _LOCAL_MODEL
+    if _LOCAL_MODEL is None:
+        try:
+            from sentence_transformers import SentenceTransformer
+            _LOCAL_MODEL = SentenceTransformer("all-MiniLM-L6-v2")
+        except ImportError:
+            _LOCAL_MODEL = None
+    return _LOCAL_MODEL
 
 
 def generate_embeddings(
@@ -30,11 +39,12 @@ def generate_embeddings(
     texts = [chunk["text"] for chunk in chunks]
     
     if model_provider == "local":
-        if LOCAL_MODEL is None:
+        model = get_local_model()
+        if model is None:
             raise RuntimeError("sentence-transformers is not installed. Run `pip install sentence-transformers`.")
         
         # Generate dense embeddings locally
-        vectors = LOCAL_MODEL.encode(texts, show_progress_bar=False).tolist()
+        vectors = model.encode(texts, show_progress_bar=False).tolist()
         
     elif model_provider == "openai":
         # Requires: pip install openai

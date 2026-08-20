@@ -1,7 +1,10 @@
+"""
+DEPRECATED — Unused prototype, superseded by backend/app/services/retriever_service.py.
+This standalone ChromaDB vector store is preserved for historical reference and is not part of the active API.
+"""
 import os
 import chromadb
 from typing import List, Dict, Any, Optional
-from sentence_transformers import SentenceTransformer
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 PDF_DIR = "data/raw"
@@ -18,6 +21,7 @@ _embedder = None
 def get_embedder():
     global _embedder
     if _embedder is None:
+        from sentence_transformers import SentenceTransformer
         _embedder = SentenceTransformer("all-MiniLM-L6-v2")
     return _embedder
 

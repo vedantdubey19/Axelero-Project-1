@@ -1,6 +1,5 @@
 import os
 from typing import List, Dict, Any, Optional
-from sentence_transformers import SentenceTransformer
 from qdrant_client import QdrantClient
 from qdrant_client.models import Filter, FieldCondition, MatchValue
 
@@ -27,8 +26,16 @@ class RetrieverService:
         except Exception:
             self.client = QdrantClient(location=":memory:")
 
-        # Lightweight embedding model for query encoding
-        self.embedder = SentenceTransformer("all-MiniLM-L6-v2")
+        # Lazy-loaded embedding model
+        self._embedder = None
+
+    @property
+    def embedder(self):
+        """Lazy load SentenceTransformer embedder on first access."""
+        if self._embedder is None:
+            from sentence_transformers import SentenceTransformer
+            self._embedder = SentenceTransformer("all-MiniLM-L6-v2")
+        return self._embedder
 
     def retrieve_relevant_chunks(
         self,
@@ -54,12 +61,23 @@ class RetrieverService:
             )
 
         try:
-            search_results = self.client.search(
-                collection_name=self.collection_name,
-                query_vector=query_vector,
-                limit=top_k,
-                query_filter=query_filter
-            )
+            if hasattr(self.client, "query_points"):
+                response = self.client.query_points(
+                    collection_name=self.collection_name,
+                    query=query_vector,
+                    limit=top_k,
+                    query_filter=query_filter
+                )
+                search_results = response.points
+            elif hasattr(self.client, "search"):
+                search_results = self.client.search(
+                    collection_name=self.collection_name,
+                    query_vector=query_vector,
+                    limit=top_k,
+                    query_filter=query_filter
+                )
+            else:
+                search_results = []
         except Exception:
             # Safe fallback if collection is not yet populated
             return []
