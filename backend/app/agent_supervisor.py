@@ -1,3 +1,6 @@
+# NOTE: This standalone prototype is superseded by backend.app.agents.supervisor.
+# It is kept for historical reference and is no longer part of the active API execution path.
+
 import os
 import sys
 from typing import TypedDict, Annotated, Sequence, Literal
