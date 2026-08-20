@@ -9,6 +9,8 @@ services:
       - "6334:6334"
     volumes:
       - qdrant_data:/qdrant/storage
+    networks:
+      - omnibrain_net
     restart: unless-stopped
 
   backend:
@@ -25,12 +27,14 @@ services:
       - ./data:/app/data
     depends_on:
       - qdrant
+    networks:
+      - omnibrain_net
     restart: unless-stopped
 
   frontend:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: frontend/Dockerfile
     container_name: omnibrain_frontend
     command: streamlit run app.py --server.port=8501 --server.address=0.0.0.0
     ports:
@@ -39,7 +43,13 @@ services:
       - BACKEND_URL=http://backend:8000
     depends_on:
       - backend
+    networks:
+      - omnibrain_net
     restart: unless-stopped
+
+networks:
+  omnibrain_net:
+    driver: bridge
 
 volumes:
   qdrant_data:
