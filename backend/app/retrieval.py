@@ -1,3 +1,7 @@
+"""
+DEPRECATED — Unused prototype, superseded by backend/app/services/retriever_service.py.
+This standalone ChromaDB pipeline is preserved for historical reference and is not part of the active API.
+"""
 from typing import List, Dict, Any
 from embeddings import generate_embeddings
 from vector_store import query_similar_chunks
