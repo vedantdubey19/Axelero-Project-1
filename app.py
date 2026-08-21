@@ -105,7 +105,19 @@ if uploaded_file is not None:
 
                         status_placeholder = st.empty()
 
+                        start_time = time.time()
+                        max_wait_time = 300
+
                         while True:
+
+                            if time.time() - start_time >= max_wait_time:
+
+                                status_placeholder.error(
+                                    "⏰ PDF processing took too long. "
+                                    "Please try again later."
+                                )
+
+                                break
 
                             try:
 
@@ -138,8 +150,13 @@ if uploaded_file is not None:
 
                                 elif status == "PROCESSING":
 
+                                    elapsed = int(
+                                        time.time() - start_time
+                                    )
+
                                     status_placeholder.info(
-                                        "⚙️ PDF is being processed..."
+                                        f"⚙️ PDF is being processed... "
+                                        f"({elapsed}s)"
                                     )
 
                                 elif status in ["COMPLETED", "DONE"]:
@@ -255,6 +272,12 @@ for message in st.session_state.chat_history:
                         f"Score: `{source['score']}`"
                     )
 
+                    if source.get("content"):
+
+                        st.caption(
+                            source["content"]
+                        )
+
 
 question = st.chat_input(
     "Ask something about your PDF..."
@@ -274,7 +297,6 @@ if question:
 
         st.markdown(question)
 
-
     with st.chat_message("assistant"):
 
         with st.spinner(
@@ -292,7 +314,6 @@ if question:
                     },
                     timeout=60
                 )
-
 
                 if response.status_code == 200:
 
@@ -313,7 +334,6 @@ if question:
                         "UNKNOWN"
                     )
 
-
                     if status == "SUCCESS":
 
                         if answer:
@@ -325,7 +345,6 @@ if question:
                             st.warning(
                                 "⚠️ The backend returned an empty answer."
                             )
-
 
                         sources = []
 
@@ -369,7 +388,6 @@ if question:
                                 }
                             )
 
-
                         if sources:
 
                             with st.expander(
@@ -397,7 +415,6 @@ if question:
 
                                     st.divider()
 
-
                         st.session_state.chat_history.append(
                             {
                                 "role": "assistant",
@@ -407,7 +424,6 @@ if question:
                                 "sources": sources
                             }
                         )
-
 
                     else:
 
@@ -426,13 +442,11 @@ if question:
                             }
                         )
 
-
                 elif response.status_code == 422:
 
                     st.error(
                         "❌ Invalid request sent to the backend."
                     )
-
 
                 else:
 
@@ -441,20 +455,17 @@ if question:
                         f"{response.status_code}"
                     )
 
-
             except requests.exceptions.ConnectionError:
 
                 st.error(
                     "❌ Cannot connect to FastAPI."
                 )
 
-
             except requests.exceptions.Timeout:
 
                 st.error(
                     "❌ Request timed out."
                 )
-
 
             except Exception as e:
 
