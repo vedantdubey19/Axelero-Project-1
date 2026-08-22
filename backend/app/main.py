@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 # Service imports
 from backend.app.services.retriever_service import RetrieverService
 from backend.app.services.llm_service import LLMSynthesisService
+from backend.app.services.citation_service import CitationService
 from backend.app.services.agent_service import (
     AgentOrchestrationService,
     AgentQueryRequest,
@@ -30,17 +31,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-UPLOAD_DIR = "data/raw"
+UPLOAD_DIR = os.path.abspath("data/raw")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 MAX_FILE_SIZE_MB = 25
 ALLOWED_MIME_TYPES = ["application/pdf"]
+SIMILARITY_CONFIDENCE_THRESHOLD = 0.65
 
 ingestion_jobs: Dict[str, Dict[str, Any]] = {}
 
 # Initialize service singletons
 retriever_service = RetrieverService()
 llm_service = LLMSynthesisService()
+citation_service = CitationService(raw_docs_dir=UPLOAD_DIR)
 agent_service = AgentOrchestrationService()
 
 
@@ -88,9 +91,19 @@ class RetrievedChunk(BaseModel):
 class QueryResponse(BaseModel):
     query_id: str
     question: str
+    original_question: Optional[str] = None
+    rewritten_query: Optional[str] = None
+    retried: bool = False
     answer: str
     retrieved_chunks: List[RetrievedChunk]
     status: str
+
+class CitationResponse(BaseModel):
+    filename: str
+    page_number: int
+    total_pages: int
+    snippet: str
+    char_count: int
 
 
 # --- Ingestion Background Worker ---
@@ -182,17 +195,30 @@ async def get_ingestion_status(job_id: str):
         )
     return ingestion_jobs[job_id]
 
+@app.get("/api/v1/citations/{filename}/{page_number}", response_model=CitationResponse, status_code=status.HTTP_200_OK)
+async def get_citation_page(filename: str, page_number: int):
+    """Serves exact PDF page snippets for frontend citation popups."""
+    active_service = CitationService(raw_docs_dir=os.path.abspath("data/raw"))
+    result = active_service.get_page_snippet(filename, page_number)
+    if not result:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Citation page {page_number} for file '{filename}' not found."
+        )
+    return CitationResponse(**result)
+
 @app.post("/api/v1/query", response_model=QueryResponse, status_code=status.HTTP_200_OK)
 async def query_documents(request: QueryRequest):
+    """Self-RAG query execution with confidence evaluation and automatic rewrite loop."""
     clean_question = request.question.strip()
     if not clean_question:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Query question cannot be empty."
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Query question cannot be empty.")
 
     query_id = str(uuid.uuid4())
+    rewritten_query_str = None
+    has_retried = False
 
+    # 1. Initial Retrieval Pass
     try:
         retrieved_data = retriever_service.retrieve_relevant_chunks(
             query=clean_question,
@@ -200,24 +226,42 @@ async def query_documents(request: QueryRequest):
             document_id=request.document_id
         )
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Vector store retrieval service unavailable: {str(e)}"
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"Retrieval error: {str(e)}")
+
+    # 2. Self-RAG Evaluation Loop: Trigger retry if empty or average score < threshold
+    avg_score = (
+        sum(item.get("score", 0.0) for item in retrieved_data) / len(retrieved_data)
+        if retrieved_data else 0.0
+    )
+
+    if not retrieved_data or avg_score < SIMILARITY_CONFIDENCE_THRESHOLD:
+        has_retried = True
+        rewritten_query_str = llm_service.rewrite_query(clean_question)
+        retry_data = retriever_service.retrieve_relevant_chunks(
+            query=rewritten_query_str,
+            top_k=request.top_k,
+            document_id=request.document_id
         )
+        if retry_data:
+            retrieved_data = retry_data
 
     chunks = [RetrievedChunk(**item) for item in retrieved_data]
 
+    # 3. LLM Synthesis
     try:
         synthesized_answer = llm_service.generate_answer(
-            question=clean_question,
+            question=rewritten_query_str or clean_question,
             retrieved_chunks=retrieved_data
         )
     except Exception as e:
-        synthesized_answer = f"Error generating answer from LLM: {str(e)}"
+        synthesized_answer = f"Error during generation: {str(e)}"
 
     return QueryResponse(
         query_id=query_id,
         question=clean_question,
+        original_question=clean_question if has_retried else None,
+        rewritten_query=rewritten_query_str,
+        retried=has_retried,
         answer=synthesized_answer,
         retrieved_chunks=chunks,
         status="SUCCESS"
