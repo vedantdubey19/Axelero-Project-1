@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 # Service imports
+from backend.app.services.guardrails_service import GuardrailsService
 from backend.app.services.retriever_service import RetrieverService
 from backend.app.services.llm_service import LLMSynthesisService
 from backend.app.services.citation_service import CitationService
@@ -22,6 +23,8 @@ app = FastAPI(
     description="Backend API Gateway for PDF ingestion, multi-modal vector search, and LangGraph agent orchestration.",
     version="1.0.0"
 )
+
+guardrails_service = GuardrailsService()
 
 app.add_middleware(
     CORSMiddleware,
@@ -211,13 +214,23 @@ async def get_citation_page(filename: str, page_number: int):
 async def query_documents(request: QueryRequest):
     """Self-RAG query execution with confidence evaluation and automatic rewrite loop."""
     clean_question = request.question.strip()
+    # Guardrails Input Rail Check (Days 22-23)
+
     if not clean_question:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Query question cannot be empty.")
 
     query_id = str(uuid.uuid4())
     rewritten_query_str = None
     has_retried = False
-
+    is_safe, rejection_message = guardrails_service.validate_input(clean_question)
+    if not is_safe:
+        return QueryResponse(
+            query_id=query_id,
+            question=clean_question,
+            answer=rejection_message,
+            retrieved_chunks=[],
+            status="BLOCKED_BY_GUARDRAILS"
+        )
     # 1. Initial Retrieval Pass
     try:
         retrieved_data = retriever_service.retrieve_relevant_chunks(
@@ -275,7 +288,19 @@ async def query_agent_graph(request: AgentQueryRequest):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Query question cannot be empty."
         )
-
+        # Guardrails Input Rail Check (Days 22-23)
+    is_safe, rejection_message = guardrails_service.validate_input(clean_question)
+    if not is_safe:
+        return AgentQueryResponse(
+            query_id=str(uuid.uuid4()),
+            session_id=request.session_id,
+            question=clean_question,
+            routed_agent="GuardrailsAgent",
+            final_answer=rejection_message,
+            execution_steps=[],
+            referenced_sources=[],
+            status="BLOCKED_BY_GUARDRAILS"
+        )
     try:
         result = await agent_service.execute_agent_workflow(
             question=clean_question,
