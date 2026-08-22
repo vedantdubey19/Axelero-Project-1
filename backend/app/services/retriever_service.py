@@ -1,3 +1,4 @@
+import os
 from typing import List, Dict, Any, Optional
 from sentence_transformers import SentenceTransformer
 from qdrant_client import QdrantClient
@@ -9,11 +10,19 @@ class RetrieverService:
     Service responsible for embedding queries and searching relevant chunks from Qdrant.
     """
 
-    def __init__(self, collection_name: str = "omnibrain_text_chunks", host: str = "localhost", port: int = 6333):
+    def __init__(
+        self,
+        collection_name: str = "omnibrain_text_chunks",
+        host: Optional[str] = None,
+        port: Optional[int] = None
+    ):
         self.collection_name = collection_name
+        qdrant_host = host or os.getenv("QDRANT_HOST", "localhost")
+        qdrant_port = port or int(os.getenv("QDRANT_PORT", "6333"))
+
         # Fallback to local in-memory storage if local Qdrant container is not running
         try:
-            self.client = QdrantClient(host=host, port=port, timeout=2.0)
+            self.client = QdrantClient(host=qdrant_host, port=qdrant_port, timeout=2.0)
             self.client.get_collections()
         except Exception:
             self.client = QdrantClient(location=":memory:")
@@ -21,8 +30,12 @@ class RetrieverService:
         # Lightweight embedding model for query encoding
         self.embedder = SentenceTransformer("all-MiniLM-L6-v2")
 
-    def retrieve_relevant_chunks(self, query: str, top_k: int = 3, document_id: Optional[str] = None) -> List[
-        Dict[str, Any]]:
+    def retrieve_relevant_chunks(
+        self,
+        query: str,
+        top_k: int = 3,
+        document_id: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         """
         Converts text query to vector and retrieves top-k matching points from Qdrant.
         """
