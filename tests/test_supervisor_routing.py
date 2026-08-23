@@ -92,7 +92,7 @@ def test_supervisor_graceful_handling_on_empty_context():
     Queries with no matching document context should be handled gracefully without crashing.
     """
     payload = {
-        "question": "What is the secret recipe for Martian sourdough bread?",
+        "question": "What was the total revenue recorded in the 1999 fiscal year report?",
         "session_id": "test-session-irrelevant",
         "document_id": "non_existent_doc.pdf"
     }
