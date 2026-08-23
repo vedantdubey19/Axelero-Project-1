@@ -1,15 +1,18 @@
-"""Tests for app/services/ocr.py"""
-
+import shutil
 from pathlib import Path
 
 import fitz
+import pytest
 
 try:
     from pdf_parser_module.app.services.ocr import run_ocr_on_page
 except ImportError:
     from app.services.ocr import run_ocr_on_page
 
+HAVE_TESSERACT = shutil.which("tesseract") is not None
 
+
+@pytest.mark.skipif(not HAVE_TESSERACT, reason="Tesseract OCR binary not installed on host")
 def test_run_ocr_on_blank_page_returns_string(blank_pdf_path: Path) -> None:
     """
     A blank page should not crash OCR - it should simply return an
@@ -22,3 +25,4 @@ def test_run_ocr_on_blank_page_returns_string(blank_pdf_path: Path) -> None:
 
     assert isinstance(text, str)
     document.close()
+

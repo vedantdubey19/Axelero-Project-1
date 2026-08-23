@@ -84,8 +84,12 @@ def test_parse_pdf_marks_ocr_used_even_when_ocr_itself_fails(
     crashing the whole document. ocr_used reflects that OCR was the
     determined path for this page, not whether it happened to succeed.
     """
-    from app.core.exceptions import OCRProcessingError
-    from app.services import parser as parser_module
+    try:
+        from pdf_parser_module.app.core.exceptions import OCRProcessingError
+        from pdf_parser_module.app.services import parser as parser_module
+    except ImportError:
+        from app.core.exceptions import OCRProcessingError
+        from app.services import parser as parser_module
 
     def fake_failing_ocr(page, page_number):
         raise OCRProcessingError("Tesseract is not installed or not found on PATH.")
