@@ -102,3 +102,71 @@ def test_supervisor_graceful_handling_on_empty_context():
     assert data["routed_agent"] == "SearchAgent"
     assert len(data["referenced_sources"]) == 0
     assert "could not find any relevant information" in data["final_answer"].lower() or "offline synthesis" in data["final_answer"].lower()
+
+
+def test_supervisor_mixed_signal_query_routing():
+    """
+    Boundary Case 1: Mixed-signal query containing both visual keywords and text-retrieval intent.
+    Example: 'Summarize the revenue figures and also describe the chart on page 3'
+
+    Design Choice & Rationale:
+    The Supervisor router implements a 'keyword-present-anywhere-wins' strategy.
+    When a user query mentions a visual artifact (e.g., 'chart' or 'figure') alongside a textual
+    request (e.g., 'summarize revenue'), the Supervisor routes directly to VisionAgent.
+    This intentional design choice prioritizes visual reasoning capabilities whenever visual modalities
+    are requested in the prompt, rather than falling back to text-only retrieval. However, composite
+    queries are currently routed as a single unit rather than split across multiple specialized sub-agents.
+    """
+    payload = {
+        "question": "Summarize the revenue figures and also describe the chart on page 3.",
+        "session_id": "test-session-mixed-signal"
+    }
+    response = client.post("/api/v1/agent/query", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["routed_agent"] == "VisionAgent"
+    assert any(step["agent_name"] == "VisionAgent" for step in data["execution_steps"])
+    assert data["status"] == "NOT_IMPLEMENTED"
+    assert "[Vision Agent Notice]" in data["final_answer"]
+
+
+def test_supervisor_near_miss_visual_query_routing():
+    """
+    Boundary Case 2: Near-miss visual query with visually-adjacent vocabulary not in the static keyword list.
+    Example: 'What does the illustration on page 2 show?'
+
+    Known Limitation:
+    The supervisor routing logic relies on a fixed 9-keyword list:
+    ['image', 'chart', 'diagram', 'figure', 'plot', 'graph', 'picture', 'visual', 'layout'].
+    Visually-adjacent synonyms such as 'illustration', 'photo', 'photograph', 'drawing', 'infographic',
+    or 'sketch' are currently not matched. As a result, this query falls through to SearchAgent
+    (text-retrieval). This is a known architectural limitation of static keyword routing compared to
+    an LLM-based intent classifier or expanded synonym lexicon.
+    """
+    payload = {
+        "question": "What does the illustration on page 2 show?",
+        "session_id": "test-session-near-miss"
+    }
+    response = client.post("/api/v1/agent/query", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["routed_agent"] == "SearchAgent"
+    assert any(step["agent_name"] == "SearchAgent" for step in data["execution_steps"])
+
+
+def test_supervisor_case_insensitive_routing():
+    """
+    Boundary Case 3: Case sensitivity check.
+    Ensures keyword matching correctly handles uppercase, lowercase, and mixed-case queries.
+    """
+    payload = {
+        "question": "Show me the CHART and visual PLOT on page 5.",
+        "session_id": "test-session-case-insensitive"
+    }
+    response = client.post("/api/v1/agent/query", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["routed_agent"] == "VisionAgent"
+    assert any(step["agent_name"] == "VisionAgent" for step in data["execution_steps"])
+    assert data["status"] == "NOT_IMPLEMENTED"
+    assert "[Vision Agent Notice]" in data["final_answer"]

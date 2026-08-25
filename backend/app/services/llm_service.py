@@ -16,7 +16,7 @@ class LLMSynthesisService:
         Self-RAG Rewriter: Expands vague queries into searchable domain terms.
         """
         if not self.api_key:
-            return f"{vague_query} detailed financial metrics and overview summary"
+            return f"{vague_query} detailed summary and key points"
 
         try:
             from openai import OpenAI
@@ -35,7 +35,7 @@ class LLMSynthesisService:
             )
             return response.choices[0].message.content.strip()
         except Exception:
-            return f"{vague_query} summary overview"
+            return f"{vague_query} detailed summary and key points"
 
     def generate_answer(self, question: str, retrieved_chunks: List[Dict[str, Any]]) -> str:
         if not retrieved_chunks:
