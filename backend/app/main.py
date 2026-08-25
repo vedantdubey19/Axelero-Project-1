@@ -108,6 +108,7 @@ class QueryResponse(BaseModel):
     original_question: Optional[str] = None
     rewritten_query: Optional[str] = None
     retried: bool = False
+    low_confidence: bool = False
     answer: str
     retrieved_chunks: List[RetrievedChunk]
     status: str
@@ -368,8 +369,9 @@ async def query_documents(request: QueryRequest):
         sum(item.get("score", 0.0) for item in retrieved_data) / len(retrieved_data)
         if retrieved_data else 0.0
     )
+    is_low_confidence = (not retrieved_data) or (avg_score < SIMILARITY_CONFIDENCE_THRESHOLD)
 
-    if not retrieved_data or avg_score < SIMILARITY_CONFIDENCE_THRESHOLD:
+    if is_low_confidence:
         has_retried = True
         rewritten_query_str = llm_service.rewrite_query(clean_question)
         retry_data = retriever_service.retrieve_relevant_chunks(
@@ -379,6 +381,12 @@ async def query_documents(request: QueryRequest):
         )
         if retry_data:
             retrieved_data = retry_data
+            retry_avg_score = (
+                sum(item.get("score", 0.0) for item in retry_data) / len(retry_data)
+            )
+            is_low_confidence = retry_avg_score < SIMILARITY_CONFIDENCE_THRESHOLD
+        else:
+            is_low_confidence = True
 
     chunks = [RetrievedChunk(**item) for item in retrieved_data]
 
@@ -397,6 +405,7 @@ async def query_documents(request: QueryRequest):
         original_question=clean_question if has_retried else None,
         rewritten_query=rewritten_query_str,
         retried=has_retried,
+        low_confidence=is_low_confidence,
         answer=synthesized_answer,
         retrieved_chunks=chunks,
         status="SUCCESS"

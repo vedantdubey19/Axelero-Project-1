@@ -51,7 +51,7 @@ def classify_route(query: str) -> str:
     """Determines target agent based on query characteristics."""
     visual_keywords = ["image", "chart", "diagram", "figure", "plot", "graph", "picture", "visual", "layout"]
     query_lower = query.lower()
-    if any(keyword in query_lower for keyword in visual_keywords):
+    if any(keyword.lower() in query_lower for keyword in visual_keywords):
         return "VisionAgent"
     return "SearchAgent"
 
