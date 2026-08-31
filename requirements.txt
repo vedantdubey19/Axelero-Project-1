@@ -33,3 +33,6 @@ requests>=2.31.0
 # Testing & QA
 pytest>=8.0.0
 flake8>=7.0.0
+
+# Observability & Tracing
+langfuse>=2.0.0

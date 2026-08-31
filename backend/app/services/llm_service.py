@@ -1,16 +1,31 @@
 import os
 from typing import List, Dict, Any
 
+try:
+    from backend.app.services.tracing_service import tracing_service
+except ImportError:
+    try:
+        from services.tracing_service import tracing_service
+    except ImportError:
+        class _DummyTracing:
+            def observe(self, *a, **k):
+                def d(f):
+                    return f
+                return d
+        tracing_service = _DummyTracing()
+
 
 class LLMSynthesisService:
     """
     Synthesizes final RAG answers and provides query-rewriting for Self-RAG loops.
+    Instrumented with Langfuse observability for token, latency, and generation tracing.
     """
     def __init__(self, model_name: str = "gpt-4o-mini", timeout_seconds: float = 15.0):
         self.model_name = model_name
         self.timeout_seconds = timeout_seconds
         self.api_key = os.getenv("OPENAI_API_KEY", "")
 
+    @tracing_service.observe(name="self_rag_rewrite_query", as_type="generation")
     def rewrite_query(self, vague_query: str) -> str:
         """
         Self-RAG Rewriter: Expands vague queries into searchable domain terms.
@@ -37,6 +52,7 @@ class LLMSynthesisService:
         except Exception:
             return f"{vague_query} detailed summary and key points"
 
+    @tracing_service.observe(name="llm_generate_answer", as_type="generation")
     def generate_answer(self, question: str, retrieved_chunks: List[Dict[str, Any]]) -> str:
         if not retrieved_chunks:
             return "I could not find any relevant information in the uploaded documents to answer your question."
