@@ -3,6 +3,19 @@ from typing import List, Dict, Any, Optional, TypedDict, Annotated
 import operator
 from pydantic import BaseModel, Field
 
+try:
+    from backend.app.services.tracing_service import tracing_service
+except ImportError:
+    try:
+        from services.tracing_service import tracing_service
+    except ImportError:
+        class _DummyTracing:
+            def observe(self, *a, **k):
+                def d(f):
+                    return f
+                return d
+        tracing_service = _DummyTracing()
+
 
 # --- Shared LangGraph State Schema ---
 
@@ -74,6 +87,7 @@ class AgentOrchestrationService:
             return "VisionAgent"
         return "SearchAgent"
 
+    @tracing_service.observe(name="agent_workflow_execution")
     async def execute_agent_workflow(
         self,
         question: str,

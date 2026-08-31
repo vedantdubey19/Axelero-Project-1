@@ -1,3 +1,16 @@
+"""
+PROTOTYPE — Not wired into the live API, uses mock data for standalone graph evaluation.
+
+This file contains an exploratory standalone LangGraph implementation of a Self-RAG loop
+(retrieve -> grade -> generate/rewrite) using hardcoded mock documents.
+
+The active production API pipeline is orchestrated via:
+- FastAPI Gateway: backend/app/main.py (/api/v1/query & /api/v1/agent/query)
+- Agent Orchestrator: backend/app/services/agent_service.py
+- Live Vector Store: backend/app/services/retriever_service.py
+- LLM Synthesis & Rewriter: backend/app/services/llm_service.py
+"""
+
 import os
 import sys
 from typing import Dict, List, Any, TypedDict, Annotated, Sequence

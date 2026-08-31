@@ -11,10 +11,20 @@ try:
     from backend.app.services.retriever_service import RetrieverService
     from backend.app.services.llm_service import LLMSynthesisService
     from backend.app.services.agent_service import AgentGraphState
+    from backend.app.services.tracing_service import tracing_service
 except ImportError:
     from services.retriever_service import RetrieverService
     from services.llm_service import LLMSynthesisService
     from services.agent_service import AgentGraphState
+    try:
+        from services.tracing_service import tracing_service
+    except ImportError:
+        class _DummyTracing:
+            def observe(self, *a, **k):
+                def d(f):
+                    return f
+                return d
+        tracing_service = _DummyTracing()
 
 # Fallback service instances
 retriever_service = RetrieverService()
@@ -56,6 +66,7 @@ def classify_route(query: str) -> str:
     return "SearchAgent"
 
 
+@tracing_service.observe(name="supervisor_node")
 def supervisor_node(state: AgentGraphState) -> Dict[str, Any]:
     """
     Supervisor node that evaluates the query intent and assigns the appropriate target agent.
@@ -84,6 +95,7 @@ def supervisor_node(state: AgentGraphState) -> Dict[str, Any]:
     }
 
 
+@tracing_service.observe(name="search_agent_node")
 def search_agent_node(state: AgentGraphState) -> Dict[str, Any]:
     """
     Search agent node that executes real vector retrieval from Qdrant and LLM synthesis.
@@ -127,6 +139,7 @@ def search_agent_node(state: AgentGraphState) -> Dict[str, Any]:
     }
 
 
+@tracing_service.observe(name="vision_agent_node")
 def vision_agent_node(state: AgentGraphState) -> Dict[str, Any]:
     """
     Vision agent stub explicitly labeled as not implemented.

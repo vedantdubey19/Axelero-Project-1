@@ -1,4 +1,5 @@
 import os
+import re
 import uuid
 import aiofiles
 from typing import Dict, Any, List, Optional
@@ -337,10 +338,11 @@ async def get_citation_page(filename: str, page_number: int):
 async def query_documents(request: QueryRequest):
     """Self-RAG query execution with confidence evaluation and automatic rewrite loop."""
     clean_question = request.question.strip()
-    # Guardrails Input Rail Check (Days 22-23)
-
-    if not clean_question:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Query question cannot be empty.")
+    if not clean_question or not re.sub(r'[\W_]+', '', clean_question).strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Query question cannot be empty or solely punctuation."
+        )
 
     query_id = str(uuid.uuid4())
     rewritten_query_str = None
@@ -414,10 +416,10 @@ async def query_documents(request: QueryRequest):
 @app.post("/api/v1/agent/query", response_model=AgentQueryResponse, status_code=status.HTTP_200_OK)
 async def query_agent_graph(request: AgentQueryRequest):
     clean_question = request.question.strip()
-    if not clean_question:
+    if not clean_question or not re.sub(r'[\W_]+', '', clean_question).strip():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Query question cannot be empty."
+            detail="Query question cannot be empty or solely punctuation."
         )
         # Guardrails Input Rail Check (Days 22-23)
     is_safe, rejection_message = guardrails_service.validate_input(clean_question)

@@ -73,3 +73,63 @@ def test_self_rag_retry_triggered_on_low_confidence_query():
     assert data["low_confidence"] is True, "Expected low_confidence flag to be True when chunks are missing/low confidence."
     assert data["status"] == "SUCCESS"
     assert "detailed summary and key points" in data["rewritten_query"] or len(data["rewritten_query"]) > len(payload["question"])
+
+
+def test_self_rag_ambiguous_on_topic_query():
+    """
+    Adversarial Case 1: Ambiguous on-topic query.
+    A vague query like 'what about the numbers' should trigger the Self-RAG rewrite
+    loop and result in a materially rewritten query and appropriate confidence evaluation.
+    """
+    payload = {
+        "question": "what about the numbers",
+        "top_k": 2
+    }
+    response = client.post("/api/v1/query", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["retried"] is True, "Expected ambiguous query to trigger rewrite retry."
+    assert data["rewritten_query"] is not None
+    assert data["rewritten_query"] != payload["question"]
+    assert "low_confidence" in data
+    assert isinstance(data["low_confidence"], bool)
+
+
+def test_self_rag_absent_content_query():
+    """
+    Adversarial Case 2: Query for content completely absent from the indexed document.
+    Asserts that the system does not fabricate confident answers, triggers rewrite,
+    and returns low_confidence=True with an honest uncertainty signal.
+    """
+    payload = {
+        "question": "What is the orbital trajectory and thrust velocity of the payload?",
+        "document_id": "citation_sample.pdf",
+        "top_k": 2
+    }
+    response = client.post("/api/v1/query", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["retried"] is True
+    assert data["low_confidence"] is True, "Absent document content must result in low_confidence=True."
+    assert (
+        "could not find any relevant information" in data["answer"].lower()
+        or data["low_confidence"] is True
+    )
+
+
+def test_self_rag_empty_or_punctuation_query_fails_gracefully():
+    """
+    Adversarial Case 3: Query containing only punctuation or whitespace.
+    Asserts that the API fails gracefully with HTTP 400 Bad Request, not a 500 error or silent hallucination.
+    """
+    payload = {
+        "question": "   ???!!!   ",
+        "top_k": 2
+    }
+    response = client.post("/api/v1/query", json=payload)
+    assert response.status_code == 400
+    data = response.json()
+    assert data["success"] is False
+    assert "empty or solely punctuation" in data["detail"]

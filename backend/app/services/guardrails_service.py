@@ -8,7 +8,12 @@ class GuardrailsService:
     Enforces input rails (jailbreak/off-topic detection) and output rails (safe responses).
     """
     def __init__(self):
-        # List of disallowed prompt injection signatures
+        # List of disallowed prompt injection signatures (high-precision regex)
+        # Note on False Negative Sensitivity (Calibrated Aug 30):
+        # The current regex signatures intentionally target high-confidence explicit jailbreaks
+        # to avoid over-blocking valid user queries. Paraphrased adversarial variations
+        # (e.g. "disregard prior directives") are logged and passed through to downstream
+        # grounded prompts in this iteration. Future hardening will introduce LLM-based intent verification.
         self.injection_patterns = [
             r"ignore (all )?previous instructions",
             r"system prompt",
@@ -17,7 +22,11 @@ class GuardrailsService:
             r"bypass (all )?filters"
         ]
 
-        # Allowed topical keywords for OmniBrain enterprise scope
+        # Illustrative domain keywords for enterprise scope.
+        # Note on False Positive Sensitivity (Calibrated Aug 30):
+        # Domain validation uses a permissive blocklist model (strictly_disallowed_topics)
+        # rather than enforcing domain_keywords as an allowlist, ensuring specialized non-financial
+        # documents (legal contracts, technical specs, HR policies) are not falsely rejected.
         self.domain_keywords = [
             "revenue", "profit", "growth", "financial", "table", "chart",
             "figure", "document", "report", "data", "summary", "trend",
