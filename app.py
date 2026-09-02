@@ -7,7 +7,16 @@ import requests
 # CONFIG
 # ==========================================
 
-BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8000")
+raw_backend_url = os.getenv("BACKEND_URL", "http://127.0.0.1:8000")
+if "backend:8000" in raw_backend_url:
+    try:
+        import socket
+        socket.gethostbyname("backend")
+        BACKEND_URL = raw_backend_url
+    except Exception:
+        BACKEND_URL = "http://127.0.0.1:8000"
+else:
+    BACKEND_URL = raw_backend_url
 
 
 # ==========================================
