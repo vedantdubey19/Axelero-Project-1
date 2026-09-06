@@ -19,7 +19,7 @@ except ImportError:
 
 # --- Shared LangGraph State Schema ---
 
-class AgentGraphState(TypedDict):
+class AgentGraphState(TypedDict, total=False):
     """Shared state contract between LangGraph nodes."""
     question: str
     session_id: str
@@ -29,6 +29,10 @@ class AgentGraphState(TypedDict):
     execution_steps: Annotated[List[Dict[str, Any]], operator.add]
     final_answer: str
     status: str
+    executed_sql: Optional[str]
+    sql_results: Optional[List[Dict[str, Any]]]
+    retry_count: Optional[int]
+    retry_history: Optional[List[Dict[str, Any]]]
 
 
 # --- Pydantic Schemas for API Layer ---
@@ -55,6 +59,10 @@ class AgentQueryResponse(BaseModel):
     execution_steps: List[AgentStep]
     referenced_sources: List[Dict[str, Any]]
     status: str
+    executed_sql: Optional[str] = None
+    sql_results: Optional[List[Dict[str, Any]]] = None
+    retry_count: int = 0
+    retry_history: List[Dict[str, Any]] = []
 
 
 # --- Agent Service Layer ---
@@ -114,7 +122,9 @@ class AgentOrchestrationService:
             "retrieved_chunks": [],
             "execution_steps": [],
             "final_answer": "",
-            "status": "RUNNING"
+            "status": "RUNNING",
+            "executed_sql": None,
+            "sql_results": None
         }
 
         try:
@@ -146,5 +156,9 @@ class AgentOrchestrationService:
             "final_answer": final_state.get("final_answer", ""),
             "execution_steps": formatted_steps,
             "referenced_sources": final_state.get("retrieved_chunks", []),
-            "status": final_state.get("status", "COMPLETED")
+            "status": final_state.get("status", "COMPLETED"),
+            "executed_sql": final_state.get("executed_sql"),
+            "sql_results": final_state.get("sql_results"),
+            "retry_count": final_state.get("retry_count", 0),
+            "retry_history": final_state.get("retry_history", [])
         }

@@ -154,15 +154,27 @@ for message in st.session_state.chat_history:
                         elif agent_name == "SearchAgent":
                             count = details.get("chunks_count", len(message.get("sources", [])))
                             st.markdown(f"- 🔍 **SearchAgent**: Retrieved `{count}` chunk(s) via hybrid vector search")
+                        elif agent_name == "SQLAgent":
+                            executed_sql = details.get("executed_sql") or message.get("executed_sql", "")
+                            rows_count = details.get("row_count", 0)
+                            sql_text = f" `{executed_sql}`" if executed_sql else ""
+                            st.markdown(f"- 📊 **SQLAgent**: Executed SQLite query{sql_text} ({rows_count} record(s) returned)")
                         elif agent_name == "VisionAgent":
-                            msg = details.get("message", "Visual reasoning stub.")
-                            st.markdown(f"- 👁️ **VisionAgent**: `{msg}`")
+                            img_path = details.get("image_path")
+                            msg = f"Analyzed visual artifact `{os.path.basename(img_path)}`" if img_path else details.get("message", "Visual multimodal analysis executed.")
+                            st.markdown(f"- 👁️ **VisionAgent**: {msg}")
                         else:
                             st.markdown(f"- ⚙️ **{agent_name}**: `{step.get('action_taken')}`")
 
-            # Vision stub notice if applicable
-            if message.get("routed_agent") == "VisionAgent" and message.get("status") == "NOT_IMPLEMENTED":
-                st.info("ℹ️ **Vision Agent Notice**: Multimodal chart/image reasoning is an explicit labeled stub in this release.")
+                    if message.get("retry_count", 0) > 0:
+                        st.markdown(f"- 🔄 **Self-RAG Optimization**: Refined query through `{message['retry_count']}` retry attempt(s)")
+
+            # Executed SQL Query viewer if applicable
+            if message.get("executed_sql"):
+                with st.expander("📊 Executed SQL Query & Data", expanded=False):
+                    st.code(message["executed_sql"], language="sql")
+                    if message.get("sql_results"):
+                        st.dataframe(message["sql_results"], use_container_width=True)
 
             # Main text answer
             st.markdown(message["content"])
@@ -238,20 +250,36 @@ if question:
                             elif agent_name == "SearchAgent":
                                 count = details.get("chunks_count", len(referenced_sources))
                                 st.write(f"🔍 **Search Agent**: Executed vector retrieval ({count} passages found)")
+                            elif agent_name == "SQLAgent":
+                                executed_sql = details.get("executed_sql") or data.get("executed_sql", "")
+                                rows_count = details.get("row_count", 0)
+                                st.write(f"📊 **SQL Agent**: Executed structured SQLite query ({rows_count} records)")
+                                if executed_sql:
+                                    st.code(executed_sql, language="sql")
                             elif agent_name == "VisionAgent":
-                                msg = details.get("message", "Visual reasoning stub.")
-                                st.write(f"👁️ **Vision Agent**: {msg}")
+                                img_path = details.get("image_path")
+                                if img_path:
+                                    st.write(f"👁️ **Vision Agent**: Multimodal visual analysis of `{os.path.basename(img_path)}`")
+                                else:
+                                    msg = details.get("message", "Visual multimodal reasoning completed.")
+                                    st.write(f"👁️ **Vision Agent**: {msg}")
                             else:
                                 st.write(f"⚙️ **{agent_name}**: {action}")
 
-                        status_box.update(label=f"🤖 Handled by {routed_agent}", state="complete", expanded=False)
+                        if data.get("retry_count", 0) > 0:
+                            st.write(f"🔄 **Self-RAG Optimization**: Query re-evaluated through {data['retry_count']} refinement retry attempt(s)")
 
-                    # Explicit vision stub notice if applicable
-                    if routed_agent == "VisionAgent" and agent_status == "NOT_IMPLEMENTED":
-                        st.info("ℹ️ **Vision Agent Notice**: Multimodal chart/image reasoning is an explicit labeled stub in this release.")
+                        status_box.update(label=f"🤖 Handled by {routed_agent}", state="complete", expanded=False)
 
                     # Main Final Answer
                     st.markdown(final_answer)
+
+                    # Executed SQL Query accordion if applicable
+                    if data.get("executed_sql"):
+                        with st.expander("📊 Executed SQL Query & Data", expanded=False):
+                            st.code(data["executed_sql"], language="sql")
+                            if data.get("sql_results"):
+                                st.dataframe(data["sql_results"], use_container_width=True)
 
                     # Grounded Sources Accordion
                     if referenced_sources:
@@ -271,7 +299,11 @@ if question:
                         "routed_agent": routed_agent,
                         "status": agent_status,
                         "execution_steps": execution_steps,
-                        "sources": referenced_sources
+                        "sources": referenced_sources,
+                        "executed_sql": data.get("executed_sql"),
+                        "sql_results": data.get("sql_results"),
+                        "retry_count": data.get("retry_count", 0),
+                        "retry_history": data.get("retry_history", [])
                     })
 
                 else:
