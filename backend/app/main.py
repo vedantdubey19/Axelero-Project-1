@@ -109,6 +109,8 @@ class QueryResponse(BaseModel):
     original_question: Optional[str] = None
     rewritten_query: Optional[str] = None
     retried: bool = False
+    retry_count: int = 0
+    retry_history: List[Dict[str, Any]] = []
     low_confidence: bool = False
     answer: str
     retrieved_chunks: List[RetrievedChunk]
@@ -147,6 +149,18 @@ def process_pdf_ingestion(job_id: str, file_path: str):
             ingestion_jobs[job_id]["status"] = "FAILED"
             ingestion_jobs[job_id]["message"] = f"Vector indexing failed: {str(index_err)}"
             return
+
+        # Ensure extracted images are saved with retrievable path by filename for VisionAgent
+        try:
+            import shutil
+            dest_img_dir = os.path.abspath(os.path.join("output", "images", filename))
+            os.makedirs(dest_img_dir, exist_ok=True)
+            for page in parse_result.pages:
+                for img in getattr(page, "images", []):
+                    if hasattr(img, "image_path") and os.path.exists(img.image_path):
+                        shutil.copy2(img.image_path, os.path.join(dest_img_dir, os.path.basename(img.image_path)))
+        except Exception as img_err:
+            print(f"[Ingestion] Warning: image indexing by filename skipped: {img_err}")
 
         ingestion_jobs[job_id]["status"] = "COMPLETED"
         ingestion_jobs[job_id]["message"] = "Document successfully ingested and indexed into vector DB."
@@ -366,36 +380,69 @@ async def query_documents(request: QueryRequest):
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"Retrieval error: {str(e)}")
 
-    # 2. Self-RAG Evaluation Loop: Trigger retry if empty or average score < threshold
+    # 2. Self-RAG Evaluation Loop: Bounded multi-step retry loop
+    max_retries = int(os.getenv("SELF_RAG_MAX_RETRIES", "2"))
     avg_score = (
         sum(item.get("score", 0.0) for item in retrieved_data) / len(retrieved_data)
         if retrieved_data else 0.0
     )
     is_low_confidence = (not retrieved_data) or (avg_score < SIMILARITY_CONFIDENCE_THRESHOLD)
 
-    if is_low_confidence:
-        has_retried = True
-        rewritten_query_str = llm_service.rewrite_query(clean_question)
-        retry_data = retriever_service.retrieve_relevant_chunks(
-            query=rewritten_query_str,
-            top_k=request.top_k,
-            document_id=request.document_id
+    retry_history: List[Dict[str, Any]] = [{
+        "attempt": 0,
+        "query": clean_question,
+        "chunks_count": len(retrieved_data),
+        "avg_score": round(avg_score, 4),
+        "passed_confidence": not is_low_confidence
+    }]
+
+    retry_count = 0
+    last_rewritten_query = None
+
+    while is_low_confidence and retry_count < max_retries:
+        retry_count += 1
+        rewritten_query_str = llm_service.rewrite_query(
+            vague_query=clean_question,
+            retrieved_chunks=retrieved_data,
+            attempt=retry_count
         )
+        last_rewritten_query = rewritten_query_str
+
+        try:
+            retry_data = retriever_service.retrieve_relevant_chunks(
+                query=rewritten_query_str,
+                top_k=request.top_k,
+                document_id=request.document_id
+            )
+        except Exception:
+            retry_data = []
+
         if retry_data:
             retrieved_data = retry_data
             retry_avg_score = (
                 sum(item.get("score", 0.0) for item in retry_data) / len(retry_data)
             )
             is_low_confidence = retry_avg_score < SIMILARITY_CONFIDENCE_THRESHOLD
+            score_to_record = retry_avg_score
         else:
             is_low_confidence = True
+            score_to_record = 0.0
 
+        retry_history.append({
+            "attempt": retry_count,
+            "query": rewritten_query_str,
+            "chunks_count": len(retry_data),
+            "avg_score": round(score_to_record, 4),
+            "passed_confidence": not is_low_confidence
+        })
+
+    has_retried = retry_count > 0
     chunks = [RetrievedChunk(**item) for item in retrieved_data]
 
     # 3. LLM Synthesis
     try:
         synthesized_answer = llm_service.generate_answer(
-            question=rewritten_query_str or clean_question,
+            question=last_rewritten_query or clean_question,
             retrieved_chunks=retrieved_data
         )
     except Exception as e:
@@ -405,8 +452,10 @@ async def query_documents(request: QueryRequest):
         query_id=query_id,
         question=clean_question,
         original_question=clean_question if has_retried else None,
-        rewritten_query=rewritten_query_str,
+        rewritten_query=last_rewritten_query,
         retried=has_retried,
+        retry_count=retry_count,
+        retry_history=retry_history,
         low_confidence=is_low_confidence,
         answer=synthesized_answer,
         retrieved_chunks=chunks,

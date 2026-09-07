@@ -1,5 +1,7 @@
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 from typing import List, Dict, Any, Optional
 from qdrant_client import QdrantClient
 from qdrant_client.models import Filter, FieldCondition, MatchValue
@@ -8,21 +10,33 @@ from qdrant_client.models import Filter, FieldCondition, MatchValue
 class RetrieverService:
     """
     Service responsible for embedding queries and searching relevant chunks from Qdrant.
+    Supports local Qdrant container, Qdrant Cloud managed clusters, and in-memory fallback.
     """
 
     def __init__(
         self,
         collection_name: str = "omnibrain_text_chunks",
         host: Optional[str] = None,
-        port: Optional[int] = None
+        port: Optional[int] = None,
+        url: Optional[str] = None,
+        api_key: Optional[str] = None
     ):
         self.collection_name = collection_name
+        qdrant_url = url or os.getenv("QDRANT_URL")
+        qdrant_api_key = api_key or os.getenv("QDRANT_API_KEY")
         qdrant_host = host or os.getenv("QDRANT_HOST", "localhost")
         qdrant_port = port or int(os.getenv("QDRANT_PORT", "6333"))
 
-        # Fallback to local in-memory storage if local Qdrant container is not running
+        # Fallback priority: Qdrant Cloud (URL/API Key) -> Local Qdrant -> In-Memory
         try:
-            self.client = QdrantClient(host=qdrant_host, port=qdrant_port, timeout=2.0)
+            if qdrant_url:
+                self.client = QdrantClient(
+                    url=qdrant_url,
+                    api_key=qdrant_api_key,
+                    timeout=5.0
+                )
+            else:
+                self.client = QdrantClient(host=qdrant_host, port=qdrant_port, timeout=2.0)
             self.client.get_collections()
         except Exception:
             self.client = QdrantClient(location=":memory:")

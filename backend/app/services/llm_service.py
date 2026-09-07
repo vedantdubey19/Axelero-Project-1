@@ -1,5 +1,5 @@
 import os
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 try:
     from backend.app.services.tracing_service import tracing_service
@@ -26,31 +26,83 @@ class LLMSynthesisService:
         self.api_key = os.getenv("OPENAI_API_KEY", "")
 
     @tracing_service.observe(name="self_rag_rewrite_query", as_type="generation")
-    def rewrite_query(self, vague_query: str) -> str:
+    def rewrite_query(
+        self,
+        vague_query: str,
+        retrieved_chunks: Optional[List[Dict[str, Any]]] = None,
+        attempt: int = 1
+    ) -> str:
         """
         Self-RAG Rewriter: Expands vague queries into searchable domain terms.
+        Uses OpenAI when API key is present; otherwise performs adaptive TF-IDF / term-overlap
+        expansion using vocabulary from retrieved chunks, falling back to domain-neutral expansion.
         """
-        if not self.api_key:
-            return f"{vague_query} detailed summary and key points"
+        if self.api_key:
+            try:
+                from openai import OpenAI
+                client = OpenAI(api_key=self.api_key, timeout=self.timeout_seconds)
+                context_hint = ""
+                if retrieved_chunks:
+                    snippets = " ".join(c.get("content", "")[:100] for c in retrieved_chunks[:2])
+                    context_hint = f" Context hints: {snippets}"
+                response = client.chat.completions.create(
+                    model=self.model_name,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "You are a search query optimizer. Given a user query and attempt number, "
+                                "rewrite it to be specific and keyword-rich for dense vector retrieval. "
+                                "Return only the rewritten query string."
+                            )
+                        },
+                        {"role": "user", "content": f"Query: {vague_query}. Attempt: {attempt}.{context_hint}"}
+                    ],
+                    temperature=0.1 + (attempt * 0.1),
+                    max_tokens=60
+                )
+                return response.choices[0].message.content.strip()
+            except Exception:
+                pass
 
-        try:
-            from openai import OpenAI
-            client = OpenAI(api_key=self.api_key, timeout=self.timeout_seconds)
-            response = client.chat.completions.create(
-                model=self.model_name,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are a search query optimizer. Given a user query, rewrite it to be specific and keyword-rich for dense vector retrieval. Return only the rewritten query string."
-                    },
-                    {"role": "user", "content": vague_query}
-                ],
-                temperature=0.1,
-                max_tokens=60
-            )
-            return response.choices[0].message.content.strip()
-        except Exception:
+        # Adaptive Offline / Heuristic Query Expansion
+        stopwords = {
+            "a", "about", "above", "after", "again", "against", "all", "am", "an", "and",
+            "any", "are", "aren't", "as", "at", "be", "because", "been", "before", "being",
+            "below", "between", "both", "but", "by", "can", "can't", "cannot", "could",
+            "did", "do", "does", "doing", "down", "during", "each", "few", "for", "from",
+            "further", "had", "has", "have", "having", "he", "her", "here", "hers", "herself",
+            "him", "himself", "his", "how", "i", "if", "in", "into", "is", "it", "its",
+            "itself", "me", "more", "most", "my", "myself", "no", "nor", "not", "of", "off",
+            "on", "once", "only", "or", "other", "ought", "our", "ours", "ourselves", "out",
+            "over", "own", "same", "she", "should", "so", "some", "such", "than", "that",
+            "the", "their", "theirs", "them", "themselves", "then", "there", "these", "they",
+            "this", "those", "through", "to", "too", "under", "until", "up", "very", "was",
+            "we", "were", "what", "when", "where", "which", "while", "who", "whom", "why",
+            "with", "would", "you", "your", "yours", "yourself", "yourselves"
+        }
+
+        extracted_terms = []
+        if retrieved_chunks:
+            import re
+            term_freq = {}
+            for chunk in retrieved_chunks:
+                text = chunk.get("content", "").lower()
+                words = re.findall(r"\b[a-zA-Z]{4,}\b", text)
+                for w in words:
+                    if w not in stopwords:
+                        term_freq[w] = term_freq.get(w, 0) + 1
+            sorted_terms = sorted(term_freq.items(), key=lambda x: x[1], reverse=True)
+            extracted_terms = [t[0] for t in sorted_terms[:3]]
+
+        if extracted_terms:
+            expansion = " ".join(extracted_terms)
+            return f"{vague_query} {expansion} overview"
+
+        if attempt == 1:
             return f"{vague_query} detailed summary and key points"
+        else:
+            return f"{vague_query} comprehensive analysis and specifications"
 
     @tracing_service.observe(name="llm_generate_answer", as_type="generation")
     def generate_answer(self, question: str, retrieved_chunks: List[Dict[str, Any]]) -> str:

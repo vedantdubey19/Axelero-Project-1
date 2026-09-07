@@ -72,7 +72,7 @@ def test_supervisor_e2e_real_search_pipeline():
 
 def test_supervisor_routes_to_vision_agent():
     """
-    Image/chart queries must route to VisionAgent and return an explicit labeled stub.
+    Image/chart queries must route to VisionAgent and execute multimodal analysis.
     """
     payload = {
         "question": "Explain the revenue breakdown bar chart and visual plot on page 4.",
@@ -83,8 +83,8 @@ def test_supervisor_routes_to_vision_agent():
     data = response.json()
     assert data["routed_agent"] == "VisionAgent"
     assert any(step["agent_name"] == "VisionAgent" for step in data["execution_steps"])
-    assert data["status"] == "NOT_IMPLEMENTED"
-    assert "[Vision Agent Notice]" in data["final_answer"]
+    assert data["status"] == "COMPLETED"
+    assert len(data["final_answer"]) > 0
 
 
 def test_supervisor_graceful_handling_on_empty_context():
@@ -108,14 +108,7 @@ def test_supervisor_mixed_signal_query_routing():
     """
     Boundary Case 1: Mixed-signal query containing both visual keywords and text-retrieval intent.
     Example: 'Summarize the revenue figures and also describe the chart on page 3'
-
-    Design Choice & Rationale:
-    The Supervisor router implements a 'keyword-present-anywhere-wins' strategy.
-    When a user query mentions a visual artifact (e.g., 'chart' or 'figure') alongside a textual
-    request (e.g., 'summarize revenue'), the Supervisor routes directly to VisionAgent.
-    This intentional design choice prioritizes visual reasoning capabilities whenever visual modalities
-    are requested in the prompt, rather than falling back to text-only retrieval. However, composite
-    queries are currently routed as a single unit rather than split across multiple specialized sub-agents.
+    Prioritizes visual reasoning capabilities whenever visual modalities are requested.
     """
     payload = {
         "question": "Summarize the revenue figures and also describe the chart on page 3.",
@@ -126,22 +119,14 @@ def test_supervisor_mixed_signal_query_routing():
     data = response.json()
     assert data["routed_agent"] == "VisionAgent"
     assert any(step["agent_name"] == "VisionAgent" for step in data["execution_steps"])
-    assert data["status"] == "NOT_IMPLEMENTED"
-    assert "[Vision Agent Notice]" in data["final_answer"]
+    assert data["status"] == "COMPLETED"
+    assert len(data["final_answer"]) > 0
 
 
 def test_supervisor_near_miss_visual_query_routing():
     """
     Boundary Case 2: Near-miss visual query with visually-adjacent vocabulary not in the static keyword list.
     Example: 'What does the illustration on page 2 show?'
-
-    Known Limitation:
-    The supervisor routing logic relies on a fixed 9-keyword list:
-    ['image', 'chart', 'diagram', 'figure', 'plot', 'graph', 'picture', 'visual', 'layout'].
-    Visually-adjacent synonyms such as 'illustration', 'photo', 'photograph', 'drawing', 'infographic',
-    or 'sketch' are currently not matched. As a result, this query falls through to SearchAgent
-    (text-retrieval). This is a known architectural limitation of static keyword routing compared to
-    an LLM-based intent classifier or expanded synonym lexicon.
     """
     payload = {
         "question": "What does the illustration on page 2 show?",
@@ -168,5 +153,128 @@ def test_supervisor_case_insensitive_routing():
     data = response.json()
     assert data["routed_agent"] == "VisionAgent"
     assert any(step["agent_name"] == "VisionAgent" for step in data["execution_steps"])
-    assert data["status"] == "NOT_IMPLEMENTED"
-    assert "[Vision Agent Notice]" in data["final_answer"]
+    assert data["status"] == "COMPLETED"
+    assert len(data["final_answer"]) > 0
+
+
+def test_supervisor_vision_agent_with_real_image():
+    """
+    Validates end-to-end VisionAgent analysis on an actual chart image.
+    Asserts multimodal analysis execution step, status COMPLETED, and extracted properties.
+    """
+    import os
+    from PIL import Image, ImageDraw
+
+    test_img_dir = os.path.abspath("output/images/chart_test_report.pdf")
+    os.makedirs(test_img_dir, exist_ok=True)
+    test_img_path = os.path.join(test_img_dir, "page_1_image_0.png")
+
+    img = Image.new("RGB", (300, 200), color=(255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle([20, 20, 280, 180], outline=(0, 0, 0), width=2)
+    draw.rectangle([50, 80, 100, 180], fill=(50, 120, 220))
+    draw.rectangle([130, 40, 180, 180], fill=(50, 120, 220))
+    draw.rectangle([210, 110, 260, 180], fill=(50, 120, 220))
+    img.save(test_img_path)
+
+    payload = {
+        "question": "What does the bar chart show for quarterly growth?",
+        "session_id": "test-session-vlm-chart",
+        "document_id": "chart_test_report.pdf"
+    }
+    response = client.post("/api/v1/agent/query", json=payload)
+    assert response.status_code == 200, f"Query failed: {response.text}"
+    data = response.json()
+
+    assert data["routed_agent"] == "VisionAgent"
+    assert data["status"] == "COMPLETED"
+    assert any(
+        step["agent_name"] == "VisionAgent" and step["action_taken"] == "VLM_MULTIMODAL_ANALYSIS"
+        for step in data["execution_steps"]
+    )
+    assert len(data["final_answer"]) > 0
+    assert "page_1_image_0.png" in data["final_answer"] or "300x200" in data["final_answer"] or "quarterly" in data["final_answer"].lower()
+
+
+def test_supervisor_routes_to_sql_agent_historical_query():
+    """
+    Historical / structured queries must route to SQLAgent and return real SQLite data.
+    """
+    payload = {
+        "question": "What is the historical revenue trend from 2021 to 2025?",
+        "session_id": "test-session-sql-historical"
+    }
+    response = client.post("/api/v1/agent/query", json=payload)
+    assert response.status_code == 200, f"Query failed: {response.text}"
+    data = response.json()
+
+    assert data["routed_agent"] == "SQLAgent"
+    assert any(step["agent_name"] == "SupervisorAgent" for step in data["execution_steps"])
+    assert any(step["agent_name"] == "SQLAgent" for step in data["execution_steps"])
+    assert data["status"] == "COMPLETED"
+    assert data.get("executed_sql") is not None
+    assert data["executed_sql"].lower().startswith("select")
+    assert "company_financials" in data["executed_sql"]
+    assert "2021" in data["final_answer"]
+    assert "2025" in data["final_answer"]
+
+
+def test_supervisor_routes_to_sql_agent_numeric_how_much_query():
+    """
+    'How much' quantitative questions must route to SQLAgent.
+    """
+    payload = {
+        "question": "How much was the net profit in 2023?",
+        "session_id": "test-session-sql-numeric"
+    }
+    response = client.post("/api/v1/agent/query", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["routed_agent"] == "SQLAgent"
+    assert any(step["agent_name"] == "SQLAgent" for step in data["execution_steps"])
+    assert data["status"] == "COMPLETED"
+    assert data.get("executed_sql") is not None
+    assert "32.1" in data["final_answer"] or "profit" in data["final_answer"].lower()
+
+
+def test_supervisor_sql_agent_injection_safety():
+    """
+    Validates that destructive SQL injection attempts and non-SELECT queries are safely rejected.
+    """
+    from backend.app.services.sql_service import SQLQueryService
+    sql_svc = SQLQueryService()
+
+    destructive_queries = [
+        "DROP TABLE company_financials",
+        "DELETE FROM company_financials WHERE year = 2021",
+        "UPDATE company_financials SET revenue = 9999",
+        "INSERT INTO company_financials (company, year, quarter, revenue, net_profit, operating_expenses, gross_margin, headcount) VALUES ('EvilCorp', 2026, 'FY', 0, 0, 0, 0, 0)",
+        "SELECT * FROM company_financials; DROP TABLE company_financials;",
+        "ALTER TABLE company_financials ADD COLUMN backdoor TEXT",
+        "ATTACH DATABASE 'evil.db' AS evil"
+    ]
+
+    for malicious_sql in destructive_queries:
+        is_safe, error = sql_svc.is_query_safe(malicious_sql)
+        assert not is_safe, f"Expected unsafe query to be rejected: {malicious_sql}"
+        assert error is not None
+
+        result = sql_svc.execute_sql(malicious_sql)
+        assert result["success"] is False
+        assert "blocked" in result["error"].lower() or "syntax" in result["error"].lower()
+
+
+def test_supervisor_search_queries_still_route_to_search_agent():
+    """
+    Verifies that semantic document queries without SQL/visual intent continue routing to SearchAgent.
+    """
+    payload = {
+        "question": "Explain the general mission statement and platform capabilities.",
+        "session_id": "test-session-search-fallback"
+    }
+    response = client.post("/api/v1/agent/query", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["routed_agent"] == "SearchAgent"
+    assert any(step["agent_name"] == "SearchAgent" for step in data["execution_steps"])
