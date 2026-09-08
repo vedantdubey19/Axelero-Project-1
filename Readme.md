@@ -6,7 +6,9 @@
 [![FastAPI](https://img.shields.io/badge/Backend-FastAPI-009688)](https://fastapi.tiangolo.com/)
 [![Streamlit](https://img.shields.io/badge/Frontend-Streamlit-ff4b4b)](https://streamlit.io/)
 [![Qdrant](https://img.shields.io/badge/Vector%20DB-Qdrant-dc244c)](https://qdrant.tech/)
-[![Status](https://img.shields.io/badge/status-in--development-yellow)]()
+[![Observability](https://img.shields.io/badge/Observability-Langfuse-e05d44)](https://langfuse.com)
+[![Guardrails](https://img.shields.io/badge/Guardrails-Custom%20Hybrid%20Engine-4c1)]()
+[![Status](https://img.shields.io/badge/status-production--ready-brightgreen)]()
 
 ---
 
@@ -14,15 +16,16 @@
 
 Standard Retrieval-Augmented Generation (RAG) pipelines break down when documents mix unstructured text with **financial tables, embedded charts, images, and structured historical data**, or when a query requires **multi-step reasoning across heterogeneous data silos**.
 
-**OmniBrain** is an agentic, multi-modal RAG orchestrator built around a **LangGraph supervisor architecture**. It routes incoming queries to the right specialist agent — semantic search, SQL, or vision — synthesizes their outputs, and returns a fully cited, grounded response instead of a single-shot LLM guess.
+**OmniBrain** is an enterprise agentic, multi-modal RAG orchestrator built around a **LangGraph supervisor architecture**. It analyzes user intent and dynamically routes incoming queries to the right specialist agent — semantic search, SQL, or vision — executes bounded self-correction loops (Self-RAG), and returns a fully cited, grounded response.
 
 ### Use Case
 
-A quantitative analyst uploads a **500-page corporate financial PDF**. OmniBrain:
-1. Parses embedded tables and charts using a Vision-Language Model (VLM)
-2. Retrieves relevant semantic text chunks from a vector database
-3. Queries historical stock data via a Text-to-SQL agent
-4. Synthesizes all three outputs into a single, cited **investment memo** — with every claim traceable back to its source page, table, or chart
+A quantitative analyst uploads a **corporate financial PDF**. OmniBrain:
+1. Parses embedded text, tables, and charts with OCR fallback
+2. Retrieves relevant semantic text chunks from a Qdrant vector database
+3. Queries historical financial records via a safe Text-to-SQL agent
+4. Analyzes embedded figures and visual trends using a Vision-Language Model (GPT-4o)
+5. Synthesizes outputs into a cited response — with every claim traceable back to its source page, table, or chart
 
 ---
 
@@ -33,33 +36,39 @@ A quantitative analyst uploads a **500-page corporate financial PDF**. OmniBrain
                          │   User Query (Streamlit)   │
                          └─────────────┬───────────────┘
                                        │
-                              ┌────────▼─────────┐
-                              │  LangGraph        │
-                              │  Supervisor Node   │
-                              └───┬───────┬────────┘
-                  ┌───────────────┘        └───────────────┐
-                  │                                        │
-         ┌────────▼─────────┐  ┌──────────────┐   ┌────────▼─────────┐
-         │   Search Agent    │  │  SQL Agent    │   │  Vision Agent     │
-         │  (Qdrant / FAISS) │  │ (Text-to-SQL) │   │ (GPT-4o / LLaVA)  │
-         └────────┬─────────┘  └───────┬───────┘   └────────┬─────────┘
-                  │                    │                     │
-                  └───────────┬────────┴──────────┬──────────┘
-                              │                    │
-                     ┌────────▼────────────────────▼────────┐
-                     │      Self-RAG Correction Loop          │
-                     │  (re-query on irrelevant retrieval)    │
-                     └────────────────┬────────────────────────┘
+                               ┌───────▼───────────┐
+                               │  Enterprise       │
+                               │  Input Guardrails │
+                               └───────┬───────────┘
+                                       │
+                               ┌───────▼───────────┐
+                               │  LangGraph        │
+                               │  Supervisor Node  │
+                               └───┬───┬───────┬───┘
+                   ┌───────────────┘   │       └───────────────┐
+                   │                   │                       │
+          ┌────────▼─────────┐  ┌──────▼───────┐      ┌────────▼─────────┐
+          │   Search Agent   │  │  SQL Agent   │      │  Vision Agent    │
+          │ (Qdrant Vector)  │  │ (SQLite AST) │      │  (GPT-4o Vision) │
+          └────────┬─────────┘  └──────┬───────┘      └────────┬─────────┘
+                   │                   │                       │
+                   └───────────┬───────┴───────────┬───────────┘
+                               │                   │
+                      ┌────────▼───────────────────▼────────┐
+                      │      Self-RAG Correction Loop       │
+                      │  (multi-step adaptive query rewrite) │
+                      └────────────────┬────────────────────┘
                                        │
                           ┌────────────▼─────────────┐
-                          │  Guardrails (NeMo)         │
-                          │  + Evaluation (Langfuse)   │
+                          │  Enterprise Output Rails │
+                          │  (PII / Secret Redactor) │
+                          │  + Tracing (Langfuse)    │
                           └────────────┬─────────────┘
                                        │
                             ┌──────────▼──────────┐
-                            │  Cited Synthesized    │
-                            │  Response (FastAPI)   │
-                            └───────────────────────┘
+                            │  Cited Synthesized  │
+                            │  Response (FastAPI) │
+                            └─────────────────────┘
 ```
 
 ---
@@ -68,101 +77,108 @@ A quantitative analyst uploads a **500-page corporate financial PDF**. OmniBrain
 
 | Module | Stack | Responsibility |
 |---|---|---|
-| **Agentic Orchestrator** | LangGraph | Manages state, memory, and routing across Search, SQL, and Vision agents |
-| **Multi-Modal Retrieval** | Qdrant / FAISS + CLIP | Stores and retrieves text chunks and image embeddings via semantic similarity |
-| **Vision-Language Model** | GPT-4o / LLaVA | Extracts and reasons over charts, graphs, and visual tables |
-| **Text-to-SQL Agent** | LangChain SQL toolkit | Converts natural-language queries into SQL against historical structured data |
-| **Evaluation & Guardrails** | Langfuse + NeMo Guardrails | Monitors for toxicity/hallucination, enforces grounding in retrieved context, tracks latency & token usage |
+| **Agentic Orchestrator** | LangGraph StateGraph | Manages state, memory, and conditional routing across Search, SQL, and Vision agents |
+| **Vector Retrieval** | Qdrant (Local / Cloud) + SentenceTransformers | Stores and retrieves dense text embeddings (`all-MiniLM-L6-v2`) with document-scoped filtering |
+| **Vision Agent** | GPT-4o Vision API + Pillow | Multimodal image reasoning over charts and figures with graceful offline metadata fallback |
+| **Text-to-SQL Agent** | SQLite3 + AST Validator | Safe read-only execution against structured financial data (FY2020–FY2025) |
+| **Self-RAG Loop** | Adaptive TF-IDF / LLM Rewriter | Bounded multi-step correction loop (`max_retries=2`) triggered on low-confidence retrieval |
+| **Guardrails** | Enterprise Custom Hybrid Engine | High-precision regex first-pass + optional secondary LLM intent check + output key redaction |
+| **Observability** | Langfuse | Traces latency, token usage, retry loops, and agent steps with graceful mock fallback |
+| **PDF Ingestion** | PyMuPDF + pdfplumber + Tesseract | Text extraction, table parsing, embedded image harvesting, and OCR fallback |
 
 ---
 
 ## Tech Stack
 
 - **Orchestration:** LangGraph, LangChain
-- **Backend:** FastAPI (async document upload & query endpoints)
-- **Frontend:** Streamlit (agent thought-process viewer, image + citation rendering)
-- **Vector Store:** Qdrant / FAISS
-- **Embeddings:** CLIP (multi-modal), text embedding model (semantic search)
-- **Vision-Language Model:** GPT-4o / LLaVA
-- **Observability:** Langfuse
-- **Guardrails:** NeMo Guardrails
-
----
-
-## Development Roadmap
-
-| Week | AI Engineering | Full-Stack Integration |
-|---|---|---|
-| **1** | Multi-modal ingestion pipeline: PDF parsing, text chunking, image extraction, embedding into Qdrant | FastAPI scaffolding for async document upload & querying |
-| **2** | LangGraph state machine + Supervisor node for query routing | Streamlit chat UI rendering agent thought process + referenced images |
-| **Mid Review** | Reasoning audit — supervisor correctly chooses vector search vs. SQL execution | Vision check — VLM accurately extracts numerical data from bar charts |
-| **3** | Self-RAG: agents detect irrelevant retrieval, rewrite queries, and retry | NeMo Guardrails integration to block out-of-scope answers |
-| **4** | Langfuse integration for token usage, latency, and execution trace observability | UI polish + clickable citations linking to exact PDF page/chart |
-| **Final Review** | Production-grade agentic system for autonomous reasoning over unstructured data | Hallucination-resistant enterprise search tool |
+- **Backend:** FastAPI, Uvicorn, Pydantic v2
+- **Frontend:** Streamlit (thought-process timeline, multimodal image rendering, interactive citations)
+- **Vector Store:** Qdrant (Docker container and Qdrant Cloud managed)
+- **Embeddings:** `sentence-transformers/all-MiniLM-L6-v2` (pre-cached, offline-safe)
+- **Vision-Language Model:** OpenAI GPT-4o Vision (with offline Pillow inspection fallback)
+- **Structured Database:** SQLite3 with AST-enforced read-only safety
+- **Observability:** Langfuse (`@tracing_service.observe`)
+- **Guardrails:** Custom Enterprise Guardrails Engine (Input injection blocklist + secondary LLM verifier + output secret redactor)
+- **Deployment:** Docker, Docker Compose, Render (`render.yaml`), Fly.io (`fly.toml`)
 
 ---
 
 ## Project Status
 
-- ✅ Mid-Review demo passed
-- ✅ Multiple ingestion/routing bugs fixed
-- ⏳ Streamlit frontend ↔ agent endpoint wiring in progress
-- ⏳ Self-RAG correction loop and guardrails integration pending
+- ✅ **Phase 0: Repo Hygiene & CI** — Merged upstream branches (`main` and `dev` in sync), verified clean CI pass.
+- ✅ **Phase 1: Text-to-SQL Agent** — Structured SQLite analytical database, read-only SQL validation, LangGraph supervisor node, and Streamlit execution trace rendering.
+- ✅ **Phase 2: Vision Agent** — GPT-4o multimodal image analysis, Pillow inspection fallback, automatic image linkage during PDF ingestion, and Streamlit image display.
+- ✅ **Phase 3: Self-RAG Correction Loop** — Bounded multi-step retry loop (`max_retries=2`), adaptive cross-domain query rewriter, `retry_count` and `retry_history` tracking across API and UI.
+- ✅ **Phase 4: Enterprise Guardrails** — High-precision regex first-pass filtering, secondary LLM adversarial intent check, and output credential/token redaction.
+- ✅ **Phase 5: Cloud Deployment** — Production blueprints for Render (`render.yaml`) and Fly.io (`fly.toml`), Qdrant Cloud managed cluster integration, and comprehensive environment templates.
+- ✅ **Phase 6: Documentation Truthfulness Pass** — Fully aligned documentation, updated API reference covering all 8 endpoints, and verified operational status.
 
 ---
 
 ## Getting Started
 
+### 1. Clone & Configure Environment
+
 ```bash
-# Clone the repo
-git clone https://github.com/vedantdubey19/omnibrain.git
-cd omnibrain
-
-# Backend setup
-cd backend
-python -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-uvicorn main:app --reload
-
-# Frontend setup
-cd ../frontend
-pip install -r requirements.txt
-streamlit run app.py
+git clone https://github.com/vedantdubey19/Axelero-Project-1.git
+cd Axelero-Project-1
+cp .env.example .env
 ```
 
-### Environment Variables
+### 2. Native Setup
 
-```env
-OPENAI_API_KEY=
-ANTHROPIC_API_KEY=
-QDRANT_URL=
-QDRANT_API_KEY=
-DATABASE_URL=
-LANGFUSE_PUBLIC_KEY=
-LANGFUSE_SECRET_KEY=
+```bash
+# Create and activate virtual environment
+python3 -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Start Backend API Gateway (FastAPI)
+uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --reload
+
+# In another terminal: Start Frontend Dashboard (Streamlit)
+source .venv/bin/activate
+streamlit run app.py --server.port 8501
 ```
 
-> ⚠️ Use `process.env` / environment-based config for all service URLs — never hardcode `localhost`, since it will break production and deployed builds.
+### 3. Containerized Setup (Docker Compose)
+
+```bash
+docker compose up --build
+```
+
+- **Backend Gateway & Swagger Docs:** [http://localhost:8000/docs](http://localhost:8000/docs)
+- **Frontend UI:** [http://localhost:8501](http://localhost:8501)
+- **Qdrant Dashboard:** [http://localhost:6333/dashboard](http://localhost:6333/dashboard)
 
 ---
 
-## Example Query Flow
+## Running Tests
 
-1. **Upload** a financial PDF via the FastAPI `/upload` endpoint
-2. **Ask:** *"What was the YoY revenue growth shown in the Q3 chart, and how does it compare to the 5-year historical average?"*
-3. **Supervisor routes** the query:
-   - Vision Agent → extracts the Q3 chart's numeric values
-   - SQL Agent → queries the historical revenue table
-   - Search Agent → retrieves supporting narrative text from the filing
-4. **Self-RAG loop** re-queries if any retrieval is irrelevant
-5. **Guardrails** verify grounding before response is returned
-6. **Response** is synthesized into a cited memo, each claim linked to its source page/chart
+```bash
+# Run all tests across the entire repository
+pytest -v
+
+# Run supervisor routing and agent execution tests
+pytest tests/test_supervisor_routing.py -v
+
+# Run Self-RAG and citation tests
+pytest tests/test_citations_and_self_rag.py -v
+
+# Run guardrails tests
+pytest tests/test_guardrails.py -v
+
+# Run observability tracing tests
+pytest tests/test_tracing.py -v
+
+# Run PDF ingestion unit tests
+pytest pdf_parser_module/tests/ -v
+```
 
 ---
 
 ## License
 
 MIT License — feel free to fork and build on this.
-
----
-
