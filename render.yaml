@@ -1,0 +1,46 @@
+services:
+  # OmniBrain Backend API Gateway (FastAPI + LangGraph + PyMuPDF)
+  - type: web
+    name: omnibrain-backend
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    region: oregon
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: 8000
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: LANGFUSE_PUBLIC_KEY
+        sync: false
+      - key: LANGFUSE_SECRET_KEY
+        sync: false
+      - key: LANGFUSE_HOST
+        value: https://cloud.langfuse.com
+      - key: QDRANT_URL
+        sync: false
+      - key: QDRANT_API_KEY
+        sync: false
+      - key: ALLOWED_ORIGINS
+        value: "*"
+      - key: SELF_RAG_MAX_RETRIES
+        value: "2"
+      - key: HF_HUB_OFFLINE
+        value: "1"
+
+  # OmniBrain Frontend UI (Streamlit)
+  - type: web
+    name: omnibrain-frontend
+    runtime: docker
+    dockerfilePath: ./frontend/Dockerfile
+    plan: starter
+    region: oregon
+    envVars:
+      - key: PORT
+        value: 8501
+      - key: BACKEND_URL
+        fromService:
+          type: web
+          name: omnibrain-backend
+          property: host
