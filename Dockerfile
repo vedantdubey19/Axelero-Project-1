@@ -16,7 +16,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install Python dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install CPU-only torch first — avoids downloading the ~2GB of CUDA/GPU
+# libraries that the default torch wheel pulls in, which caused a timeout
+# on slower connections
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+
+# Install everything else, with a longer timeout and retries for slow connections
+RUN pip install --no-cache-dir --default-timeout=300 --retries 5 -r requirements.txt
 
 # Copy project files
 COPY . .
