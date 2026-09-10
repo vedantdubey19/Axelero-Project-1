@@ -9,6 +9,7 @@ assembles everything into a single ParseResult.
 
 import time
 from pathlib import Path
+from typing import List
 
 try:
     from pdf_parser_module.app.core.config import settings
@@ -81,7 +82,7 @@ def parse_pdf(file_id: str, file_path: Path, original_filename: str) -> ParseRes
         file_path, document.page_count, table_output_folder
     )
 
-    pages: list[PageResult] = []
+    pages: List[PageResult] = []
 
     for page_index in range(document.page_count):
         page_number = page_index + 1
