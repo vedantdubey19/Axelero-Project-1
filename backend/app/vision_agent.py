@@ -1,3 +1,8 @@
+"""
+DEPRECATED — Unused prototype, superseded by backend/app/services/vision_service.py
+and backend/app/agents/supervisor.py (vision_agent_node).
+This standalone mock table/visual parser is preserved for historical reference and is not part of the active API.
+"""
 import os
 import sys
 from typing import Dict, Any

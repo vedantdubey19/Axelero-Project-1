@@ -16,7 +16,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install Python dependencies
 COPY requirements.txt .
-
 # Install CPU-only torch first — avoids downloading the ~2GB of CUDA/GPU
 # libraries that the default torch wheel pulls in, which caused a timeout
 # on slower connections
@@ -31,5 +30,5 @@ COPY . .
 # Expose backend API port
 EXPOSE 8000
 
-# Start FastAPI backend
-CMD ["uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Start FastAPI backend with dynamic port support
+CMD ["sh", "-c", "uvicorn backend.app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

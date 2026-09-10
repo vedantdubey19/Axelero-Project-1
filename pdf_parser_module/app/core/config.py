@@ -9,6 +9,7 @@ defaults for local development.
 
 import os
 from pathlib import Path
+from typing import Optional, Set
 
 from dotenv import load_dotenv
 
@@ -41,7 +42,7 @@ class Settings:
     JSON_OUTPUT_DIR: Path = OUTPUT_DIR / "json"
 
     # --- Upload validation --------------------------------------------------
-    ALLOWED_EXTENSIONS: set[str] = {".pdf"}
+    ALLOWED_EXTENSIONS: Set[str] = {".pdf"}
     MAX_FILE_SIZE_MB: int = int(os.getenv("MAX_FILE_SIZE_MB", "50"))
     MAX_FILE_SIZE_BYTES: int = MAX_FILE_SIZE_MB * 1024 * 1024
 
@@ -56,7 +57,7 @@ class Settings:
 
     # Path to the tesseract executable. On Windows this typically needs
     # to be set explicitly, e.g. C:\Program Files\Tesseract-OCR\tesseract.exe
-    TESSERACT_CMD: str | None = os.getenv("TESSERACT_CMD")
+    TESSERACT_CMD: Optional[str] = os.getenv("TESSERACT_CMD")
 
     # --- Logging -------------------------------------------------------
     LOG_DIR: Path = BASE_DIR / "logs"

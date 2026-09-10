@@ -2,6 +2,7 @@
 
 from collections import defaultdict
 from pathlib import Path
+from typing import Dict, List
 import csv
 
 import pdfplumber
@@ -18,13 +19,13 @@ def extract_all_tables(
     file_path: Path,
     total_pages: int,
     output_folder: Path,
-) -> dict[int, list[TableData]]:
+) -> Dict[int, List[TableData]]:
     """Extract tables from every PDF page using pdfplumber.
 
     Returns a mapping of 1-indexed page number to extracted tables.
     Each table is saved as a CSV file in ``output_folder``.
     """
-    results: dict[int, list[TableData]] = {
+    results: Dict[int, List[TableData]] = {
         page_number: [] for page_number in range(1, total_pages + 1)
     }
 

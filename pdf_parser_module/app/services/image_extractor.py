@@ -6,6 +6,7 @@ and saves each one to output/images/<file_id>/.
 """
 
 from pathlib import Path
+from typing import List
 
 import fitz
 
@@ -24,7 +25,7 @@ def extract_images_from_page(
     page: fitz.Page,
     page_number: int,
     output_folder: Path,
-) -> list[ImageData]:
+) -> List[ImageData]:
     """
     Extract all embedded images from a single page.
 
@@ -41,7 +42,7 @@ def extract_images_from_page(
         Images that fail to extract are skipped with a warning logged,
         rather than aborting the whole page.
     """
-    extracted_images: list[ImageData] = []
+    extracted_images: List[ImageData] = []
     image_list = page.get_images(full=True)
 
     for index, image_info in enumerate(image_list):

@@ -8,6 +8,7 @@ this module at a glance.
 """
 
 from datetime import datetime, timezone
+from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -45,19 +46,19 @@ class PageResult(BaseModel):
     page_number: int = Field(..., description="1-indexed page number")
     text: str = Field(default="", description="Extracted or OCR-recognized text")
     ocr_used: bool = Field(default=False, description="Whether OCR was required for this page")
-    images: list[ImageData] = Field(default_factory=list)
-    tables: list[TableData] = Field(default_factory=list)
+    images: List[ImageData] = Field(default_factory=list)
+    tables: List[TableData] = Field(default_factory=list)
 
 
 class PDFMetadata(BaseModel):
     """Document-level metadata pulled from the PDF's info dictionary."""
 
-    title: str | None = None
-    author: str | None = None
-    subject: str | None = None
-    keywords: str | None = None
-    creation_date: str | None = None
-    modification_date: str | None = None
+    title: Optional[str] = None
+    author: Optional[str] = None
+    subject: Optional[str] = None
+    keywords: Optional[str] = None
+    creation_date: Optional[str] = None
+    modification_date: Optional[str] = None
     total_pages: int = 0
     file_size_bytes: int = 0
 
@@ -75,7 +76,7 @@ class ParseResult(BaseModel):
     file_id: str
     file_name: str
     metadata: PDFMetadata
-    pages: list[PageResult]
+    pages: List[PageResult]
     processed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     processing_time_seconds: float = 0.0
 
