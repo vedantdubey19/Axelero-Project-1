@@ -36,3 +36,7 @@ uploads/
 .DS_Store
 .vscode/
 .idea/
+.env
+__pycache__/
+*.pyc
+chroma_db/
