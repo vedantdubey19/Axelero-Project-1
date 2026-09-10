@@ -1,22 +1,37 @@
 import os
+import time
 import uuid
 import streamlit as st
 import requests
 
 # ==========================================
-# CONFIG
+# CONFIG & BACKEND CONNECTIVITY (Fix 8)
 # ==========================================
 
 raw_backend_url = os.getenv("BACKEND_URL", "http://127.0.0.1:8000")
-if "backend:8000" in raw_backend_url:
+
+def resolve_backend_url(url: str) -> str:
+    """
+    Fast reachability check with 1.0s timeout.
+    Falls back gracefully to http://127.0.0.1:8000 if the configured URL is unreachable.
+    """
+    if not url:
+        return "http://127.0.0.1:8000"
+    target = url.rstrip("/")
+    if "127.0.0.1:8000" in target or "localhost:8000" in target:
+        return target
+
     try:
-        import socket
-        socket.gethostbyname("backend")
-        BACKEND_URL = raw_backend_url
+        resp = requests.get(f"{target}/health", timeout=1.0)
+        if resp.status_code == 200:
+            return target
     except Exception:
-        BACKEND_URL = "http://127.0.0.1:8000"
-else:
-    BACKEND_URL = raw_backend_url
+        pass
+
+    # Unreachable configured backend -> fall back to default local gateway
+    return "http://127.0.0.1:8000"
+
+BACKEND_URL = resolve_backend_url(raw_backend_url)
 
 
 # ==========================================
@@ -31,17 +46,42 @@ st.set_page_config(
 
 
 # ==========================================
-# SESSION STATE
+# SESSION STATE & HYDRATION (Fix 7)
 # ==========================================
 
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
+# Synchronize session_id with browser query parameters across page reloads
+query_params = st.query_params
+url_session_id = query_params.get("session_id")
+
+if "session_id" not in st.session_state:
+    if url_session_id:
+        st.session_state.session_id = url_session_id
+    else:
+        new_sid = str(uuid.uuid4())
+        st.session_state.session_id = new_sid
+        st.query_params["session_id"] = new_sid
+else:
+    if st.query_params.get("session_id") != st.session_state.session_id:
+        st.query_params["session_id"] = st.session_state.session_id
 
 if "uploaded_filename" not in st.session_state:
     st.session_state.uploaded_filename = None
 
-if "session_id" not in st.session_state:
-    st.session_state.session_id = str(uuid.uuid4())
+# Hydrate chat_history from backend if empty in session state
+if "chat_history" not in st.session_state or not st.session_state.chat_history:
+    st.session_state.chat_history = []
+    try:
+        hist_resp = requests.get(
+            f"{BACKEND_URL}/api/v1/chat/history/{st.session_state.session_id}",
+            timeout=3.0
+        )
+        if hist_resp.status_code == 200:
+            hist_data = hist_resp.json()
+            messages = hist_data.get("messages", [])
+            if messages:
+                st.session_state.chat_history = messages
+    except Exception:
+        pass
 
 
 # ==========================================
@@ -59,6 +99,9 @@ st.caption("Multi-Agent Document Intelligence & LangGraph Supervisor Orchestrati
 with st.sidebar:
     st.header("📄 Document Management")
 
+    if raw_backend_url != BACKEND_URL:
+        st.warning(f"⚠️ Primary backend `{raw_backend_url}` unreachable. Using `{BACKEND_URL}`.")
+
     if st.session_state.uploaded_filename:
         st.success(f"✅ Active: **{st.session_state.uploaded_filename}**")
     else:
@@ -70,13 +113,23 @@ with st.sidebar:
     st.caption(f"**Backend Gateway:** `{BACKEND_URL}`")
 
     if st.button("🗑️ Clear Chat History", use_container_width=True):
+        # Clear backend chat history for this session as well
+        try:
+            requests.delete(
+                f"{BACKEND_URL}/api/v1/chat/history/{st.session_state.session_id}",
+                timeout=3.0
+            )
+        except Exception:
+            pass
+        new_sid = str(uuid.uuid4())
+        st.session_state.session_id = new_sid
+        st.query_params["session_id"] = new_sid
         st.session_state.chat_history = []
-        st.session_state.session_id = str(uuid.uuid4())
         st.rerun()
 
 
 # ==========================================
-# PDF UPLOAD WIDGET
+# PDF UPLOAD WIDGET & INGESTION POLLING (Fix 5)
 # ==========================================
 
 st.subheader("📄 Upload Document")
@@ -88,7 +141,7 @@ uploaded_file = st.file_uploader(
 
 if uploaded_file is not None:
     if st.button("Upload & Index Document", type="primary"):
-        with st.spinner("📤 Uploading and triggering background ingestion pipeline..."):
+        with st.spinner("📤 Uploading document to OmniBrain API..."):
             try:
                 files = {
                     "file": (
@@ -105,8 +158,56 @@ if uploaded_file is not None:
                 )
 
                 if response.status_code in [200, 201]:
+                    data = response.json()
+                    job_id = data.get("job_id")
                     st.session_state.uploaded_filename = uploaded_file.name
-                    st.success(f"✅ Document **{uploaded_file.name}** uploaded and queued for vector indexing!")
+                    st.info(f"📤 Uploaded successfully. Job ID: `{job_id}`.")
+
+                    # Async Polling loop
+                    progress_bar = st.progress(10, text="Job queued for processing...")
+                    status_placeholder = st.empty()
+                    max_poll_seconds = 60
+                    poll_interval = 1.5
+                    start_time = time.time()
+                    job_completed = False
+
+                    while time.time() - start_time < max_poll_seconds:
+                        time.sleep(poll_interval)
+                        elapsed = int(time.time() - start_time)
+                        try:
+                            status_resp = requests.get(
+                                f"{BACKEND_URL}/api/v1/ingest/status/{job_id}",
+                                timeout=5.0
+                            )
+                            if status_resp.status_code == 200:
+                                status_info = status_resp.json()
+                                job_status = status_info.get("status", "QUEUED")
+                                msg = status_info.get("message", "")
+
+                                if job_status == "QUEUED":
+                                    progress_bar.progress(20, text=f"⏳ {msg} ({elapsed}s)")
+                                elif job_status == "PROCESSING":
+                                    progress_bar.progress(60, text=f"⚙️ {msg} ({elapsed}s)")
+                                elif job_status == "COMPLETED":
+                                    progress_bar.progress(100, text="✅ Document successfully ingested and indexed into vector DB!")
+                                    status_placeholder.success(f"🎉 **{uploaded_file.name}** is fully processed and ready for querying!")
+                                    job_completed = True
+                                    break
+                                elif job_status == "FAILED":
+                                    err_detail = status_info.get("error_detail") or msg
+                                    progress_bar.progress(100, text="❌ Ingestion failed")
+                                    status_placeholder.error(f"❌ Ingestion failed: {err_detail}")
+                                    job_completed = True
+                                    break
+                        except Exception as poll_err:
+                            status_placeholder.warning(f"Polling connection warning: {poll_err}")
+
+                    if not job_completed:
+                        progress_bar.progress(90, text="⚠️ Processing taking longer than expected...")
+                        status_placeholder.warning(
+                            f"Document processing continues in the background. Job ID: `{job_id}`. "
+                            "You can proceed with queries once complete."
+                        )
                 else:
                     st.error(f"❌ Upload failed with status code {response.status_code}: {response.text}")
 

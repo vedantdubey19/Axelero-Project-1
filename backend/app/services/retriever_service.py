@@ -1,10 +1,34 @@
 import os
+import threading
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 from typing import List, Dict, Any, Optional
 from qdrant_client import QdrantClient
 from qdrant_client.models import Filter, FieldCondition, MatchValue
+
+# Global thread-safe reentrant lock and singleton for SentenceTransformer
+_EMBEDDER_LOCK = threading.RLock()
+_GLOBAL_EMBEDDER = None
+
+
+def get_shared_embedder():
+    """Thread-safe retrieval/initialization of the shared SentenceTransformer singleton."""
+    global _GLOBAL_EMBEDDER
+    if _GLOBAL_EMBEDDER is None:
+        with _EMBEDDER_LOCK:
+            if _GLOBAL_EMBEDDER is None:
+                from sentence_transformers import SentenceTransformer
+                try:
+                    _GLOBAL_EMBEDDER = SentenceTransformer("all-MiniLM-L6-v2", local_files_only=True)
+                except Exception:
+                    _GLOBAL_EMBEDDER = SentenceTransformer("all-MiniLM-L6-v2")
+    return _GLOBAL_EMBEDDER
+
+
+def preload_embedder():
+    """Pre-warms and loads the shared SentenceTransformer model into memory at startup."""
+    return get_shared_embedder()
 
 
 class RetrieverService:
@@ -41,16 +65,15 @@ class RetrieverService:
         except Exception:
             self.client = QdrantClient(location=":memory:")
 
-        # Lazy-loaded embedding model
+        # Optional instance-level embedder override, defaults to global singleton
         self._embedder = None
 
     @property
     def embedder(self):
-        """Lazy load SentenceTransformer embedder on first access."""
-        if self._embedder is None:
-            from sentence_transformers import SentenceTransformer
-            self._embedder = SentenceTransformer("all-MiniLM-L6-v2")
-        return self._embedder
+        """Thread-safe access to SentenceTransformer embedder."""
+        if self._embedder is not None:
+            return self._embedder
+        return get_shared_embedder()
 
     def retrieve_relevant_chunks(
         self,
@@ -60,8 +83,11 @@ class RetrieverService:
     ) -> List[Dict[str, Any]]:
         """
         Converts text query to vector and retrieves top-k matching points from Qdrant.
+        Synchronized via _EMBEDDER_LOCK to avoid PyTorch CPU meta-tensor copy race conditions.
         """
-        query_vector = self.embedder.encode(query, convert_to_numpy=True).tolist()
+        embedder = self.embedder
+        with _EMBEDDER_LOCK:
+            query_vector = embedder.encode(query, convert_to_numpy=True).tolist()
 
         # Optional payload filtering by specific document_id
         query_filter = None

@@ -23,7 +23,8 @@ class LLMSynthesisService:
     def __init__(self, model_name: str = "gpt-4o-mini", timeout_seconds: float = 15.0):
         self.model_name = model_name
         self.timeout_seconds = timeout_seconds
-        self.api_key = os.getenv("OPENAI_API_KEY", "")
+        raw_key = os.getenv("OPENAI_API_KEY", "")
+        self.api_key = raw_key if raw_key and not raw_key.startswith("sk-placeholder") else ""
 
     @tracing_service.observe(name="self_rag_rewrite_query", as_type="generation")
     def rewrite_query(

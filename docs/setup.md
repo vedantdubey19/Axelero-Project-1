@@ -5,7 +5,7 @@ This guide covers local development (native and Docker Compose) and production c
 ---
 
 ## 1. Prerequisites
-- **Python 3.11+**
+- **Python 3.9+** (Full typing and runtime compatibility across Python 3.9 through 3.12)
 - **Docker & Docker Compose** (optional for local, required for containerized environments)
 - **Git**
 - Optional: OpenAI API Key (for GPT-4o-mini generation, query rewriting, and GPT-4o vision)
@@ -57,9 +57,21 @@ docker compose up --build
 
 | Service | Container Name | Port | Description |
 | :--- | :--- | :--- | :--- |
-| **Backend** | `omnibrain-backend` | `8000` | FastAPI gateway with LangGraph orchestration |
-| **Frontend** | `omnibrain-frontend` | `8501` | Streamlit multimodal interactive dashboard |
-| **Qdrant** | `omnibrain-qdrant` | `6333` | Vector database with persistence volume |
+| **Backend** | `omnibrain_backend` | `8000` | FastAPI gateway with LangGraph orchestration |
+| **Frontend** | `omnibrain_frontend` | `8501` | Streamlit multimodal interactive dashboard |
+| **Qdrant** | `omnibrain_qdrant` | `6333` | Vector database with persistence volume |
+
+### Useful Container Commands:
+```bash
+# View backend container logs:
+docker logs -f omnibrain_backend
+
+# View frontend container logs:
+docker logs -f omnibrain_frontend
+
+# Execute shell in running backend container:
+docker exec -it omnibrain_backend bash
+```
 
 ### Verification Endpoints:
 - Backend Health: `http://localhost:8000/health`
@@ -135,4 +147,21 @@ pytest pdf_parser_module/tests/ -v
 # Run full test suite with coverage summary
 pytest -v
 ```
+
+---
+
+## 8. Branch Protection & Pull Request Review Workflow
+
+To ensure code stability and maintain divergence-free releases:
+
+1. **Protected Branches:**
+   - `main`: Production release branch. Direct pushes to `main` are strictly forbidden.
+   - `dev`: Active integration branch. All features and bugfixes must merge into `dev` first.
+
+2. **Mandatory Pull Request (PR) Requirements:**
+   - **Code Review Approval:** Every PR requires at least one approving review from an area owner before merge.
+   - **Automated CI Checks:** Full test suite (`pytest tests/ -v` and `pytest pdf_parser_module/tests/ -v`) must pass without failures or unhandled deprecations.
+   - **Branch Synchronization:** Before merging a feature branch into `dev`, ensure it is rebased onto or merged with the latest `dev`.
+   - **Release Merges:** When promoting changes from `dev` to `main`, use fast-forward merges or squash merges to preserve a linear git history.
+
 

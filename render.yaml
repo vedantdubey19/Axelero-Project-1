@@ -28,11 +28,16 @@ services:
         value: "2"
       - key: HF_HUB_OFFLINE
         value: "1"
+      - key: MAX_FILE_SIZE_MB
+        value: "25"
+      - key: LANGFUSE_BASE_URL
+        value: https://cloud.langfuse.com
 
   # OmniBrain Frontend UI (Streamlit)
   - type: web
     name: omnibrain-frontend
     runtime: docker
+    dockerContext: .
     dockerfilePath: ./frontend/Dockerfile
     plan: starter
     region: oregon
