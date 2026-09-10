@@ -8,12 +8,15 @@ from fastapi import FastAPI, File, UploadFile, HTTPException, Request, status, B
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
+from contextlib import asynccontextmanager
+
 # Service imports with robust fallbacks
 try:
     from backend.app.services.guardrails_service import GuardrailsService
-    from backend.app.services.retriever_service import RetrieverService
+    from backend.app.services.retriever_service import RetrieverService, preload_embedder
     from backend.app.services.llm_service import LLMSynthesisService
     from backend.app.services.citation_service import CitationService
+    from backend.app.services.job_store import job_store
     from backend.app.services.agent_service import (
         AgentOrchestrationService,
         AgentQueryRequest,
@@ -21,19 +24,32 @@ try:
     )
 except ImportError:
     from services.guardrails_service import GuardrailsService
-    from services.retriever_service import RetrieverService
+    from services.retriever_service import RetrieverService, preload_embedder
     from services.llm_service import LLMSynthesisService
     from services.citation_service import CitationService
+    from services.job_store import job_store
     from services.agent_service import (
         AgentOrchestrationService,
         AgentQueryRequest,
         AgentQueryResponse
     )
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Pre-warm shared SentenceTransformer singleton to prevent concurrency race conditions
+    try:
+        preload_embedder()
+    except Exception as e:
+        print(f"[Lifespan] Embedding pre-warm notice: {e}")
+    yield
+
+
 app = FastAPI(
     title="OmniBrain API Core",
     description="Backend API Gateway for PDF ingestion, multi-modal vector search, and LangGraph agent orchestration.",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 guardrails_service = GuardrailsService()
@@ -49,7 +65,7 @@ app.add_middleware(
 UPLOAD_DIR = os.path.abspath("data/raw")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-MAX_FILE_SIZE_MB = 25
+MAX_FILE_SIZE_MB = int(os.getenv("MAX_FILE_SIZE_MB", "25"))
 ALLOWED_MIME_TYPES = ["application/pdf"]
 SIMILARITY_CONFIDENCE_THRESHOLD = 0.65
 
@@ -128,8 +144,12 @@ class CitationResponse(BaseModel):
 
 def process_pdf_ingestion(job_id: str, file_path: str):
     try:
-        ingestion_jobs[job_id]["status"] = "PROCESSING"
-        ingestion_jobs[job_id]["message"] = "Extracting text, tables, and images via document parser..."
+        job_store.update_job(
+            job_id=job_id,
+            status="PROCESSING",
+            message="Extracting text, tables, and images via document parser..."
+        )
+        ingestion_jobs[job_id] = job_store.get_job(job_id) or {}
 
         parse_result = None
         try:
@@ -137,8 +157,13 @@ def process_pdf_ingestion(job_id: str, file_path: str):
             from pathlib import Path
             parse_result = parse_pdf(job_id, Path(file_path), os.path.basename(file_path))
         except Exception as parse_err:
-            ingestion_jobs[job_id]["status"] = "FAILED"
-            ingestion_jobs[job_id]["message"] = f"PDF parsing failed: {str(parse_err)}"
+            job_store.update_job(
+                job_id=job_id,
+                status="FAILED",
+                message=f"PDF parsing failed: {str(parse_err)}",
+                error_detail=str(parse_err)
+            )
+            ingestion_jobs[job_id] = job_store.get_job(job_id) or {}
             return
 
         # Index parsed text chunks into Qdrant for retriever_service
@@ -146,8 +171,13 @@ def process_pdf_ingestion(job_id: str, file_path: str):
         try:
             _index_parsed_text_to_qdrant(parse_result, filename)
         except Exception as index_err:
-            ingestion_jobs[job_id]["status"] = "FAILED"
-            ingestion_jobs[job_id]["message"] = f"Vector indexing failed: {str(index_err)}"
+            job_store.update_job(
+                job_id=job_id,
+                status="FAILED",
+                message=f"Vector indexing failed: {str(index_err)}",
+                error_detail=str(index_err)
+            )
+            ingestion_jobs[job_id] = job_store.get_job(job_id) or {}
             return
 
         # Ensure extracted images are saved with retrievable path by filename for VisionAgent
@@ -162,11 +192,20 @@ def process_pdf_ingestion(job_id: str, file_path: str):
         except Exception as img_err:
             print(f"[Ingestion] Warning: image indexing by filename skipped: {img_err}")
 
-        ingestion_jobs[job_id]["status"] = "COMPLETED"
-        ingestion_jobs[job_id]["message"] = "Document successfully ingested and indexed into vector DB."
+        job_store.update_job(
+            job_id=job_id,
+            status="COMPLETED",
+            message="Document successfully ingested and indexed into vector DB."
+        )
+        ingestion_jobs[job_id] = job_store.get_job(job_id) or {}
     except Exception as e:
-        ingestion_jobs[job_id]["status"] = "FAILED"
-        ingestion_jobs[job_id]["message"] = f"Ingestion failed: {str(e)}"
+        job_store.update_job(
+            job_id=job_id,
+            status="FAILED",
+            message=f"Ingestion failed: {str(e)}",
+            error_detail=str(e)
+        )
+        ingestion_jobs[job_id] = job_store.get_job(job_id) or {}
 
 
 def _index_parsed_text_to_qdrant(parse_result, filename: str):
@@ -270,13 +309,14 @@ async def upload_pdf(background_tasks: BackgroundTasks, file: UploadFile = File(
         await file.close()
 
     job_id = str(uuid.uuid4())
-    ingestion_jobs[job_id] = {
-        "job_id": job_id,
-        "filename": file.filename,
-        "file_path": file_path,
-        "status": "QUEUED",
-        "message": "Ingestion job queued automatically after upload."
-    }
+    job = job_store.create_job(
+        job_id=job_id,
+        filename=file.filename,
+        file_path=file_path,
+        status="QUEUED",
+        message="Ingestion job queued automatically after upload."
+    )
+    ingestion_jobs[job_id] = job
 
     background_tasks.add_task(process_pdf_ingestion, job_id, file_path)
 
@@ -291,12 +331,15 @@ async def upload_pdf(background_tasks: BackgroundTasks, file: UploadFile = File(
 
 @app.get("/api/v1/ingest/status/{job_id}", status_code=status.HTTP_200_OK)
 async def get_ingestion_status(job_id: str):
-    if job_id not in ingestion_jobs:
+    job = job_store.get_job(job_id)
+    if not job:
+        job = ingestion_jobs.get(job_id)
+    if not job:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Ingestion job with ID '{job_id}' not found."
         )
-    return ingestion_jobs[job_id]
+    return job
 
 @app.get("/api/v1/search", status_code=status.HTTP_200_OK)
 async def search_documents(query: str, top_k: int = 3, document_id: Optional[str] = None):
@@ -462,6 +505,30 @@ async def query_documents(request: QueryRequest):
         status="SUCCESS"
     )
 
+@app.get("/api/v1/chat/history/{session_id}", status_code=status.HTTP_200_OK)
+async def get_session_chat_history(session_id: str):
+    """
+    Retrieve stored chat history messages for a specific session ID.
+    Enables frontend chat hydration across page refreshes.
+    """
+    messages = job_store.get_chat_history(session_id)
+    return {
+        "session_id": session_id,
+        "messages": messages,
+        "count": len(messages)
+    }
+
+@app.delete("/api/v1/chat/history/{session_id}", status_code=status.HTTP_200_OK)
+async def clear_session_chat_history(session_id: str):
+    """
+    Clear stored chat history for a session ID.
+    """
+    job_store.clear_chat_history(session_id)
+    return {
+        "session_id": session_id,
+        "message": f"Chat history for session '{session_id}' cleared successfully."
+    }
+
 @app.post("/api/v1/agent/query", response_model=AgentQueryResponse, status_code=status.HTTP_200_OK)
 async def query_agent_graph(request: AgentQueryRequest):
     clean_question = request.question.strip()
@@ -470,9 +537,23 @@ async def query_agent_graph(request: AgentQueryRequest):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Query question cannot be empty or solely punctuation."
         )
-        # Guardrails Input Rail Check (Days 22-23)
+
+    # Save user message to persistent chat history
+    job_store.save_chat_message(request.session_id, "user", clean_question)
+
+    # Guardrails Input Rail Check (Days 22-23)
     is_safe, rejection_message = guardrails_service.validate_input(clean_question)
     if not is_safe:
+        job_store.save_chat_message(
+            request.session_id,
+            "assistant",
+            rejection_message,
+            details={
+                "routed_agent": "GuardrailsAgent",
+                "status": "BLOCKED_BY_GUARDRAILS",
+                "execution_steps": []
+            }
+        )
         return AgentQueryResponse(
             query_id=str(uuid.uuid4()),
             session_id=request.session_id,
@@ -488,6 +569,23 @@ async def query_agent_graph(request: AgentQueryRequest):
             question=clean_question,
             session_id=request.session_id,
             document_id=request.document_id
+        )
+        # Save assistant answer to persistent chat history
+        job_store.save_chat_message(
+            request.session_id,
+            "assistant",
+            result.get("final_answer", ""),
+            details={
+                "routed_agent": result.get("routed_agent", "SearchAgent"),
+                "status": result.get("status", "COMPLETED"),
+                "execution_steps": result.get("execution_steps", []),
+                "sources": result.get("referenced_sources", []),
+                "referenced_sources": result.get("referenced_sources", []),
+                "executed_sql": result.get("executed_sql"),
+                "sql_results": result.get("sql_results"),
+                "retry_count": result.get("retry_count", 0),
+                "retry_history": result.get("retry_history", [])
+            }
         )
         return AgentQueryResponse(**result)
     except Exception as e:

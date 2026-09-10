@@ -4,6 +4,7 @@ Image helper functions shared by the OCR and image extraction services.
 
 import io
 from pathlib import Path
+from typing import Tuple
 
 from PIL import Image
 
@@ -13,7 +14,7 @@ except ImportError:
     from app.core.logger import logger
 
 
-def save_image_bytes(image_bytes: bytes, destination: Path) -> tuple[int, int]:
+def save_image_bytes(image_bytes: bytes, destination: Path) -> Tuple[int, int]:
     """
     Save raw image bytes to disk and return the image's (width, height).
 
